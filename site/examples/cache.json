@@ -3,6 +3,6 @@
   "publicKey": "trynix-examples-1:dZOV2uGWvjHo6IC5ZqCCu0dmIRzLm9pyOQJBDnBsXRY=",
   "paths": {
     "hello-trynix": "/nix/store/awmhh7ci4admi71gs6b73awh0lxgrqqn-hello-trynix-2.12.3",
-    "probe": "/nix/store/ywdyvqcf7pixj4hkby287vzlnxni6kkx-trynix-probe-static-x86_64-unknown-linux-musl-1"
+    "probe": "/nix/store/hsw39dqkjv40y8w7dh797pf3zr9vkll8-trynix-probe-static-x86_64-unknown-linux-musl-1"
   }
 }

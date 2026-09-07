@@ -12,12 +12,34 @@
  * way and every other check in the tree passed.
  *
  * Scope is x86-64-v2 and v3 scalar, which is what raising the CPU model
- * in nix/guest/machine.json newly reached. The vector half is left out:
- * TCG lowers most of it through helpers shared with every backend,
+ * in nix/guest/machine.json newly reached, plus the older arithmetic a
+ * JIT is equally free to get wrong: the flag-carrying and conditional
+ * instructions compilers reach for constantly. The vector half is left
+ * out: TCG lowers most of it through helpers shared with every backend,
  * rather than through the per-op code that was wrong here.
+ *
+ * Worth knowing while reading this: the engine has TWO implementations
+ * of every opcode. A translation block is interpreted by TCI for its
+ * first 1500 executions and compiled to WebAssembly after that, and a
+ * compiled block falls back to the interpreter when the engine runs out
+ * of instances. The two can disagree -- ctpop did, TCI being the correct
+ * one -- so an instruction is only really checked once it has run both
+ * ways. Hence REPEATS below.
  */
+
 #include <stdint.h>
 #include <stdio.h>
+#include <x86intrin.h>
+
+/* Enough passes to carry each block past the engine's compile threshold
+ * (INSTANTIATE_NUM, 1500) so the compiled implementation is exercised
+ * and not just the interpreter. */
+#define REPEATS 25
+
+/* A failing instruction fails on most inputs and on every pass, so the
+ * first handful of lines carry the diagnosis and the rest are noise.
+ * Counting continues past the cap. */
+#define MAX_REPORTS 40
 
 static int failures = 0;
 
@@ -30,10 +52,12 @@ static void check(const char *what, uint64_t input, uint64_t got, uint64_t want)
     if (got == want) {
         return;
     }
-    printf("FAIL %-12s in=0x%016llx got=0x%llx want=0x%llx\n", what,
-           (unsigned long long)input, (unsigned long long)got,
-           (unsigned long long)want);
     failures++;
+    if (failures <= MAX_REPORTS) {
+        printf("FAIL %-12s in=0x%016llx got=0x%llx want=0x%llx\n", what,
+               (unsigned long long)input, (unsigned long long)got,
+               (unsigned long long)want);
+    }
 }
 
 /* Reference implementations: plain C, no instruction newer than the
@@ -118,7 +142,7 @@ static uint64_t ref_pext(uint64_t x, uint64_t mask)
     static uint64_t name(uint64_t x)                                          \
     {                                                                         \
         uint64_t r;                                                           \
-        __asm__(mnemonic "\t%1, %0" : "=r"(r) : "r"(x) : "cc");                \
+        __asm__ volatile(mnemonic "\t%1, %0" : "=r"(r) : "r"(x) : "cc");                \
         return r;                                                             \
     }
 
@@ -126,7 +150,7 @@ static uint64_t ref_pext(uint64_t x, uint64_t mask)
     static uint64_t name(uint64_t a, uint64_t b)                              \
     {                                                                         \
         uint64_t r;                                                           \
-        __asm__(mnemonic "\t%2, %1, %0" : "=r"(r) : "r"(a), "r"(b) : "cc");     \
+        __asm__ volatile(mnemonic "\t%2, %1, %0" : "=r"(r) : "r"(a), "r"(b) : "cc");     \
         return r;                                                             \
     }
 
@@ -153,14 +177,14 @@ BINARY(asm_sarx, "sarx")
 static uint64_t asm_tzcnt_carry(uint64_t x, uint64_t *idx)
 {
     uint64_t is_zero;
-    __asm__("tzcnt\t%2, %1" : "=@ccc"(is_zero), "=r"(*idx) : "r"(x) : "cc");
+    __asm__ volatile("tzcnt\t%2, %1" : "=@ccc"(is_zero), "=r"(*idx) : "r"(x) : "cc");
     return is_zero;
 }
 
 static uint64_t asm_lzcnt_carry(uint64_t x, uint64_t *idx)
 {
     uint64_t is_zero;
-    __asm__("lzcnt\t%2, %1" : "=@ccc"(is_zero), "=r"(*idx) : "r"(x) : "cc");
+    __asm__ volatile("lzcnt\t%2, %1" : "=@ccc"(is_zero), "=r"(*idx) : "r"(x) : "cc");
     return is_zero;
 }
 
@@ -169,14 +193,14 @@ static uint64_t asm_lzcnt_carry(uint64_t x, uint64_t *idx)
 static uint64_t asm_popcnt_zero(uint64_t x, uint64_t *count)
 {
     uint64_t is_zero;
-    __asm__("popcnt\t%2, %1" : "=@ccz"(is_zero), "=r"(*count) : "r"(x) : "cc");
+    __asm__ volatile("popcnt\t%2, %1" : "=@ccz"(is_zero), "=r"(*count) : "r"(x) : "cc");
     return is_zero;
 }
 
 static uint64_t asm_rorx(uint64_t x)
 {
     uint64_t r;
-    __asm__("rorx\t$13, %1, %0" : "=r"(r) : "r"(x));
+    __asm__ volatile("rorx\t$13, %1, %0" : "=r"(r) : "r"(x));
     return r;
 }
 
@@ -185,21 +209,21 @@ static uint64_t asm_rorx(uint64_t x)
 static uint64_t asm_mulx(uint64_t a, uint64_t b, uint64_t *high)
 {
     uint64_t low;
-    __asm__("mulx\t%3, %0, %1" : "=r"(low), "=r"(*high) : "d"(a), "r"(b));
+    __asm__ volatile("mulx\t%3, %0, %1" : "=r"(low), "=r"(*high) : "d"(a), "r"(b));
     return low;
 }
 
 static uint64_t asm_pdep(uint64_t x, uint64_t mask)
 {
     uint64_t r;
-    __asm__("pdep\t%2, %1, %0" : "=r"(r) : "r"(x), "r"(mask));
+    __asm__ volatile("pdep\t%2, %1, %0" : "=r"(r) : "r"(x), "r"(mask));
     return r;
 }
 
 static uint64_t asm_pext(uint64_t x, uint64_t mask)
 {
     uint64_t r;
-    __asm__("pext\t%2, %1, %0" : "=r"(r) : "r"(x), "r"(mask));
+    __asm__ volatile("pext\t%2, %1, %0" : "=r"(r) : "r"(x), "r"(mask));
     return r;
 }
 
@@ -208,7 +232,7 @@ static uint64_t asm_pext(uint64_t x, uint64_t mask)
 static uint64_t asm_movbe_load(const uint64_t *from)
 {
     uint64_t r;
-    __asm__("movbe\t%1, %0" : "=r"(r) : "m"(*from));
+    __asm__ volatile("movbe\t%1, %0" : "=r"(r) : "m"(*from));
     return r;
 }
 
@@ -219,6 +243,194 @@ static uint64_t ref_bswap(uint64_t x)
         r = (r << 8) | ((x >> (byte * 8)) & 0xFF);
     }
     return r;
+}
+
+
+/*
+ * The older arithmetic, which a JIT is no less free to get wrong and
+ * which compilers emit far more of than they do BMI. These carry a flag
+ * in or out, or choose between values on one -- the shapes where a
+ * backend has two things to get right rather than one.
+ */
+
+/* Compare-and-swap: the instruction every lock-free structure is built
+ * on, and the one whose failure looks like memory corruption rather than
+ * arithmetic. Returns the zero flag, which says whether the swap took. */
+static int asm_cmpxchg64(uint64_t *cell, uint64_t expected, uint64_t desired,
+                         uint64_t *seen)
+{
+    unsigned char took;
+    __asm__ volatile("lock cmpxchgq %[des], %[mem]"
+                     : "+a"(expected), [mem] "+m"(*cell), "=@ccz"(took)
+                     : [des] "r"(desired)
+                     : "cc", "memory");
+    *seen = expected;
+    return took;
+}
+
+/* The 128-bit form, which x86-64-v2 is what makes available at all. */
+static int asm_cmpxchg16b(__int128 *cell, __int128 expected, __int128 desired)
+{
+    return __sync_bool_compare_and_swap(cell, expected, desired);
+}
+
+/* Fetch-and-add, and the unconditional swap. */
+static uint64_t asm_xadd(uint64_t *cell, uint64_t addend)
+{
+    __asm__ volatile("lock xaddq %[val], %[mem]"
+                     : [val] "+r"(addend), [mem] "+m"(*cell)
+                     :
+                     : "cc", "memory");
+    return addend;
+}
+
+static uint64_t asm_xchg(uint64_t *cell, uint64_t value)
+{
+    __asm__ volatile("xchgq %[val], %[mem]"
+                     : [val] "+r"(value), [mem] "+m"(*cell)
+                     :
+                     : "memory");
+    return value;
+}
+
+/* The bit-test family: the answer is a flag, and three of the four also
+ * write the word back. */
+static int asm_bt(uint64_t x, uint64_t bit)
+{
+    unsigned char c;
+    __asm__ volatile("btq %[b], %[v]" : "=@ccc"(c) : [v] "r"(x), [b] "r"(bit) : "cc");
+    return c;
+}
+
+static uint64_t asm_bts(uint64_t x, uint64_t bit, int *was_set)
+{
+    unsigned char c;
+    __asm__ volatile("btsq %[b], %[v]"
+            : [v] "+r"(x), "=@ccc"(c)
+            : [b] "r"(bit)
+            : "cc");
+    *was_set = c;
+    return x;
+}
+
+static uint64_t asm_btr(uint64_t x, uint64_t bit)
+{
+    __asm__ volatile("btrq %[b], %[v]" : [v] "+r"(x) : [b] "r"(bit) : "cc");
+    return x;
+}
+
+static uint64_t asm_btc(uint64_t x, uint64_t bit)
+{
+    __asm__ volatile("btcq %[b], %[v]" : [v] "+r"(x) : [b] "r"(bit) : "cc");
+    return x;
+}
+
+/* Add and subtract carrying a flag between words: how every bignum and
+ * every 128-bit add is built. */
+static uint64_t asm_adc(uint64_t a, uint64_t b, int carry_in, int *carry_out)
+{
+    unsigned long long sum;
+    *carry_out = _addcarry_u64((unsigned char)carry_in, a, b, &sum);
+    return sum;
+}
+
+static uint64_t asm_sbb(uint64_t a, uint64_t b, int borrow_in, int *borrow_out)
+{
+    unsigned long long diff;
+    *borrow_out = _subborrow_u64((unsigned char)borrow_in, a, b, &diff);
+    return diff;
+}
+
+/* Choosing a value on a flag rather than branching on it. */
+static uint64_t asm_cmovg(uint64_t a, uint64_t b, uint64_t x, uint64_t y)
+{
+    uint64_t r = y;
+    __asm__ volatile("cmpq %[b], %[a]\n\tcmovgq %[x], %[r]"
+            : [r] "+r"(r)
+            : [a] "r"(a), [b] "r"(b), [x] "r"(x)
+            : "cc");
+    return r;
+}
+
+static uint64_t asm_setb(uint64_t a, uint64_t b)
+{
+    unsigned char r;
+    __asm__ volatile("cmpq %[b], %[a]\n\tsetb %[r]"
+            : [r] "=r"(r)
+            : [a] "r"(a), [b] "r"(b)
+            : "cc");
+    return r;
+}
+
+/* The double-width shifts, which read one register and shift bits in
+ * from another. */
+static uint64_t asm_shld(uint64_t high, uint64_t low, int count)
+{
+    __asm__ volatile("shldq %%cl, %[lo], %[hi]"
+            : [hi] "+r"(high)
+            : [lo] "r"(low), "c"((unsigned char)count)
+            : "cc");
+    return high;
+}
+
+static uint64_t asm_shrd(uint64_t low, uint64_t high, int count)
+{
+    __asm__ volatile("shrdq %%cl, %[hi], %[lo]"
+            : [lo] "+r"(low)
+            : [hi] "r"(high), "c"((unsigned char)count)
+            : "cc");
+    return low;
+}
+
+static uint64_t asm_bswap(uint64_t x)
+{
+    __asm__ volatile("bswapq %0" : "+r"(x));
+    return x;
+}
+
+/* The one-operand multiply, whose two halves land in fixed registers --
+ * a different code path from mulx, which names its own. */
+static uint64_t asm_mul_full(uint64_t a, uint64_t b, uint64_t *high)
+{
+    uint64_t low;
+    __asm__ volatile("mulq %[b]" : "=a"(low), "=d"(*high) : "a"(a), [b] "r"(b) : "cc");
+    return low;
+}
+
+/* And the divide, which reads a 128-bit dividend from the same pair.
+ * The high word is kept below the divisor so the quotient fits and the
+ * CPU does not fault instead of answering. */
+static uint64_t asm_div_full(uint64_t high, uint64_t low, uint64_t divisor,
+                             uint64_t *remainder)
+{
+    uint64_t quotient;
+    __asm__ volatile("divq %[d]"
+            : "=a"(quotient), "=d"(*remainder)
+            : "a"(low), "d"(high), [d] "r"(divisor)
+            : "cc");
+    return quotient;
+}
+
+/* CRC32C, the SSE4.2 checksum, which hash tables reach for. */
+static uint64_t asm_crc32(uint64_t crc, uint64_t value)
+{
+    __asm__ volatile("crc32q %[v], %[c]" : [c] "+r"(crc) : [v] "r"(value));
+    return crc;
+}
+
+/* Castagnoli, reflected: the polynomial the instruction implements. The
+ * instruction is a raw update of the running value -- it does not invert
+ * going in or coming out, the way a complete CRC32C of a message does --
+ * so neither does this. */
+static uint64_t ref_crc32c(uint64_t crc, uint64_t value)
+{
+    for (int byte = 0; byte < 8; byte++) {
+        crc ^= (value >> (byte * 8)) & 0xFF;
+        for (int bit = 0; bit < 8; bit++) {
+            crc = (crc & 1) ? ((crc >> 1) ^ 0x82F63B78ULL) : (crc >> 1);
+        }
+    }
+    return crc & 0xFFFFFFFFULL;
 }
 
 int main(void)
@@ -243,6 +455,12 @@ int main(void)
 
     const uint64_t other = 0xF0F0F0F0F0F0F0F0ULL;
 
+    /* Everything below runs REPEATS times. One pass checks that each
+     * instruction is right; the repetition is what carries each block
+     * past the engine's compile threshold, so the answer is checked
+     * against both of the engine's implementations rather than only the
+     * interpreter it starts in. */
+    for (int pass = 0; pass < REPEATS; pass++) {
     for (size_t i = 0; i < count; i++) {
         uint64_t x = inputs[i];
 
@@ -295,12 +513,91 @@ int main(void)
         check("movbe", x, asm_movbe_load(&x), ref_bswap(x));
     }
 
+    /* The rest, over the same inputs. These are checked in their own
+     * pass so a failure names which family broke rather than burying it
+     * among the counts. */
+    for (size_t i = 0; i < count; i++) {
+        uint64_t x = inputs[i];
+        const uint64_t bit = i % 64;
+
+        /* Compare-and-swap, both outcomes: one where the cell holds what
+         * was expected and the swap takes, one where it does not. */
+        uint64_t cell = x;
+        uint64_t seen = 0;
+        check("cmpxchg.hit", x, asm_cmpxchg64(&cell, x, other, &seen), 1);
+        check("cmpxchg.new", x, cell, other);
+        check("cmpxchg.seen", x, seen, x);
+
+        cell = x;
+        check("cmpxchg.miss", x, asm_cmpxchg64(&cell, ~x, other, &seen), 0);
+        check("cmpxchg.kept", x, cell, x);
+        check("cmpxchg.read", x, seen, x);
+
+        __int128 wide = (__int128)x << 64 | other;
+        check("cmpxchg16b", x, asm_cmpxchg16b(&wide, wide, 0), 1);
+        check("cmpxchg16b.no", x, asm_cmpxchg16b(&wide, ~(__int128)0, wide), 0);
+
+        cell = x;
+        check("xadd", x, asm_xadd(&cell, other), x);
+        check("xadd.sum", x, cell, x + other);
+
+        cell = x;
+        check("xchg", x, asm_xchg(&cell, other), x);
+        check("xchg.new", x, cell, other);
+
+        /* The bit-test family, against a shift and a mask. */
+        check("bt", x, (uint64_t)asm_bt(x, bit), (x >> bit) & 1);
+        int was_set = 0;
+        check("bts", x, asm_bts(x, bit, &was_set), x | (1ULL << bit));
+        check("bts.cf", x, (uint64_t)was_set, (x >> bit) & 1);
+        check("btr", x, asm_btr(x, bit), x & ~(1ULL << bit));
+        check("btc", x, asm_btc(x, bit), x ^ (1ULL << bit));
+
+        /* Carry in and carry out, both directions. */
+        int carry = 0;
+        check("adc", x, asm_adc(x, other, 1, &carry), x + other + 1);
+        check("adc.cf", x, (uint64_t)carry,
+              (x + other + 1 < x) || (other == ~0ULL));
+        check("sbb", x, asm_sbb(x, other, 1, &carry), x - other - 1);
+        check("sbb.cf", x, (uint64_t)carry, (x < other + 1) || (other == ~0ULL));
+
+        /* Conditional move and conditional set, signed and unsigned. */
+        check("cmovg", x, asm_cmovg(x, other, 1, 2),
+              ((int64_t)x > (int64_t)other) ? 1 : 2);
+        check("setb", x, asm_setb(x, other), (x < other) ? 1 : 0);
+
+        /* The double-width shifts, at a count that crosses the word. */
+        check("shld", x, asm_shld(x, other, 13), (x << 13) | (other >> 51));
+        check("shrd", x, asm_shrd(x, other, 13), (x >> 13) | (other << 51));
+
+        check("bswap", x, asm_bswap(x), ref_bswap(x));
+
+        /* The fixed-register multiply, against the same 128-bit product
+         * mulx is checked on. */
+        uint64_t high = 0;
+        uint64_t low = asm_mul_full(x, other, &high);
+        __uint128_t product = (__uint128_t)x * (__uint128_t)other;
+        check("mul.lo", x, low, (uint64_t)product);
+        check("mul.hi", x, high, (uint64_t)(product >> 64));
+
+        /* Divide a 128-bit value whose high word is small enough that the
+         * quotient fits in 64 bits. */
+        const uint64_t divisor = (other | 1);
+        uint64_t remainder = 0;
+        uint64_t quotient = asm_div_full(0, x, divisor, &remainder);
+        check("div.q", x, quotient, x / divisor);
+        check("div.r", x, remainder, x % divisor);
+
+        check("crc32", x, asm_crc32(0, x), ref_crc32c(0, x));
+    }
+
     /* bzhi clears the bits from index n upward, and leaves the value
      * alone once n reaches the register width. */
     for (uint64_t n = 0; n <= 70; n++) {
         const uint64_t all = 0xFFFFFFFFFFFFFFFFULL;
         const uint64_t want = (n >= 64) ? all : (all & ((1ULL << n) - 1));
         check("bzhi", n, asm_bzhi(all, n), want);
+    }
     }
 
     if (failures == 0) {
