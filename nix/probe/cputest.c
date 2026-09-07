@@ -29,6 +29,8 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
+#include <sys/mman.h>
 #include <x86intrin.h>
 
 /* Enough passes to carry each block past the engine's compile threshold
@@ -433,6 +435,104 @@ static uint64_t ref_crc32c(uint64_t crc, uint64_t value)
     return crc & 0xFFFFFFFFULL;
 }
 
+
+/*
+ * Self-modifying code: what a JavaScript engine does all day and a
+ * static binary never does at all.
+ *
+ * The emulator caches a translation of every block of guest code, and
+ * the wasm engine goes further and compiles hot blocks into their own
+ * WebAssembly module. Both caches have to be thrown away the moment the
+ * guest writes over the instructions they came from. x86 asks for no
+ * cache flush to make a rewrite take effect, so nothing in the guest
+ * announces the change: the emulator has to notice the write itself.
+ *
+ * Miss that and a stale translation keeps running after the code under
+ * it has changed -- rarely, because it needs the block to have been
+ * compiled first, and only in a program that rewrites its own code.
+ * Nothing else in this file can see that: every other check runs
+ * instructions that were in the binary when it was linked.
+ */
+
+/* A stub is `mov eax, <value>; ret`, which is all this needs to tell one
+ * generation of the code from the next. */
+#define STUB_BYTES 6
+#define STUB_OPCODE_MOV_EAX 0xB8
+#define STUB_OPCODE_RET 0xC3
+
+/* Past the engine's compile threshold, so each generation of the stub is
+ * running as compiled WebAssembly before it is overwritten. */
+#define STUB_HOT 1700
+#define STUB_ROUNDS 40
+
+typedef uint32_t (*stub_fn)(void);
+
+static void write_stub(unsigned char *at, uint32_t value)
+{
+    at[0] = STUB_OPCODE_MOV_EAX;
+    memcpy(at + 1, &value, sizeof(value));
+    at[5] = STUB_OPCODE_RET;
+}
+
+/* Call it hot enough to be compiled, checking every answer. */
+static void run_stub(const char *what, unsigned char *at, uint32_t want)
+{
+    stub_fn call = (stub_fn)(void *)at;
+    for (int i = 0; i < STUB_HOT; i++) {
+        check(what, want, call(), want);
+    }
+}
+
+static void check_self_modifying_code(void)
+{
+    const size_t page = 4096;
+    unsigned char *code = mmap(NULL, page, PROT_READ | PROT_WRITE | PROT_EXEC,
+                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (code == MAP_FAILED) {
+        printf("FAIL smc.mmap  could not map a writable, executable page\n");
+        failures++;
+        return;
+    }
+
+    /* Rewrite the same address over and over. Each generation is made
+     * hot before the next overwrites it, so every round asks whether a
+     * compiled block survived the code it came from being replaced. */
+    for (uint32_t round = 0; round < STUB_ROUNDS; round++) {
+        const uint32_t value = 0x5A5A0000u + round;
+        write_stub(code, value);
+        run_stub("smc.rewrite", code, value);
+    }
+
+    /* Two stubs sharing a page: rewriting one must not disturb the
+     * other, and must not take the other's translation with it. */
+    unsigned char *first = code;
+    unsigned char *second = code + 64;
+    write_stub(first, 0x11110000u);
+    write_stub(second, 0x22220000u);
+    run_stub("smc.first", first, 0x11110000u);
+    run_stub("smc.second", second, 0x22220000u);
+    for (uint32_t round = 0; round < STUB_ROUNDS; round++) {
+        write_stub(first, 0x33330000u + round);
+        run_stub("smc.rewritten", first, 0x33330000u + round);
+        run_stub("smc.neighbour", second, 0x22220000u);
+    }
+
+    /* And the narrowest case: patch only the four immediate bytes, in
+     * the middle of a block the emulator has already translated. This is
+     * what a JIT does when it backpatches a constant, and it is the
+     * write most easily missed, since the instruction boundaries do not
+     * move and only the operand changes. */
+    write_stub(code, 0x44440000u);
+    run_stub("smc.patched", code, 0x44440000u);
+    for (uint32_t round = 0; round < STUB_ROUNDS; round++) {
+        const uint32_t value = 0x44440000u + round + 1;
+        memcpy(code + 1, &value, sizeof(value));
+        run_stub("smc.immediate", code, value);
+    }
+
+    munmap(code, page);
+}
+
 int main(void)
 {
     /* Zero, every single-bit value, all ones, and a few values this
@@ -599,6 +699,8 @@ int main(void)
         check("bzhi", n, asm_bzhi(all, n), want);
     }
     }
+
+    check_self_modifying_code();
 
     if (failures == 0) {
         printf("cputest: ok\n");
