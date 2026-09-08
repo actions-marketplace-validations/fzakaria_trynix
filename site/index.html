@@ -106,6 +106,15 @@
         title="a patched hello that exists in no public cache, fetched from a cache served next to this page"
       >
         a patched hello from another cache
+      </a> ·
+      <!-- The emulator's own throughput probe (nix/emubench.nix), from the
+           same cache. Type `emubench all` at the shell; docs/engine-execution.md
+           says what each row measures. -->
+      <a
+        href="?path=/nix/store/vk1ih0la8pfs92v8cy5vkv48kgmi14db-trynix-emubench-static-x86_64-unknown-linux-musl-1&cache=/examples/cache%20trynix-examples-1:dZOV2uGWvjHo6IC5ZqCCu0dmIRzLm9pyOQJBDnBsXRY="
+        title="the emulator's throughput probe: type `emubench all` at the shell and read each instruction class's speed"
+      >
+        benchmark the emulator
       </a>
     </p>
 

@@ -1,0 +1,10 @@
+StorePath: /nix/store/vk1ih0la8pfs92v8cy5vkv48kgmi14db-trynix-emubench-static-x86_64-unknown-linux-musl-1
+URL: nar/0pw11hb9rrwh954x93szvrfhl2z4gps8lywn6sci0k1b6m852xi6.nar.xz
+Compression: xz
+FileHash: sha256:0pw11hb9rrwh954x93szvrfhl2z4gps8lywn6sci0k1b6m852xi6
+FileSize: 19972
+NarHash: sha256:1hc5pm8ly2flp5rvwamghk6zmdj4b01rfqyanbdvv9c4azz2xkp4
+NarSize: 1556888
+References: 
+Deriver: 058x6l2qpzl7l5f9yjvsn1nj06cwrfcb-trynix-emubench-static-x86_64-unknown-linux-musl-1.drv
+Sig: trynix-examples-1:bQTBd9mZaKD668mtywLXB0D/GVzgbUfa3ErC5Hu34dTT3eovc9UDIUyfrzzaciZqXuPeGEZub8I1FmdJTDblCg==

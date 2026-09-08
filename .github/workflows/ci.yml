@@ -73,3 +73,9 @@ jobs:
       # the probe is one static path out of the site's own cache.
       - name: Computes what the hardware would
         run: nix run .#cpu-test -- --site "$(nix build .#site --no-link --print-out-paths)"
+
+      # The throughput probe, as a smoke run: it has to finish and print
+      # every row. The numbers go in the log for eyes; a shared runner is
+      # too noisy to hold them to a threshold.
+      - name: Runs every instruction class
+        run: nix run .#emubench -- --site "$(nix build .#site --no-link --print-out-paths)"

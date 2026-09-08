@@ -40,6 +40,10 @@
           # check the emulator's arithmetic (nix/probe.nix)
           probe = import ./nix/probe.nix { inherit pkgs; };
 
+          # the throughput probe tools/emubench.py runs the same way, to
+          # put a number on each instruction class (nix/emubench.nix)
+          emubench = import ./nix/emubench.nix { inherit pkgs; };
+
           # the guest image the browser VM boots: kernel, initramfs and
           # the BIOS blobs (nix/guest.nix)
           inherit (import ./nix/guest.nix { inherit pkgs; })
@@ -105,6 +109,28 @@
               python = pkgs.python3.withPackages (ps: [ ps.websocket-client ]);
             in
             tool "cpu-test" "${python}/bin/python3 ${./tools/cpu-test.py}" [
+              pkgs.chromium
+            ];
+
+          # run the throughput probe in a real browser and print what each
+          # instruction class costs; --engine compares a local engine.
+          # The tools directory as a whole, since this imports cpu-test.py
+          emubench =
+            let
+              python = pkgs.python3.withPackages (ps: [ ps.websocket-client ]);
+            in
+            tool "emubench" "${python}/bin/python3 ${./tools}/emubench.py" [
+              pkgs.chromium
+            ];
+
+          # run a few real packages cold and warm in fresh guests and
+          # report wall time, guest CPU, browser CPU and memory, with
+          # ratios against an earlier run's --json
+          exec-bench =
+            let
+              python = pkgs.python3.withPackages (ps: [ ps.websocket-client ]);
+            in
+            tool "exec-bench" "${python}/bin/python3 ${./tools}/exec-bench.py" [
               pkgs.chromium
             ];
 
@@ -241,13 +267,26 @@
               touch $out
             '';
 
-          # the node test suite: the narinfo parser against a fixture,
-          # offline
-          tests = pkgs.runCommand "trynix-tests" { nativeBuildInputs = [ pkgs.nodejs ]; } ''
-            cd ${self}
-            node --test tests/site/*.test.mjs
-            touch $out
-          '';
+          # the probes build; cpu-test and emubench run them in CI's browser
+          probe = self.packages.${system}.probe;
+          emubench = self.packages.${system}.emubench;
+
+          # the test suites, offline: node for the site's narinfo parser
+          # against a fixture, python for the benchmark tools' parsers
+          tests =
+            pkgs.runCommand "trynix-tests"
+              {
+                nativeBuildInputs = [
+                  pkgs.nodejs
+                  pkgs.python3
+                ];
+              }
+              ''
+                cd ${self}
+                node --test tests/site/*.test.mjs
+                python3 -m unittest discover -s tests/tools -t .
+                touch $out
+              '';
         }
       );
 

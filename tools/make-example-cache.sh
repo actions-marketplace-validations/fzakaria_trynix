@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Publish the site's own binary cache: the example package the README
-# boots, and the CPU probe tools/cpu-test.py runs inside the guest.
+# boots, the CPU probe tools/cpu-test.py runs inside the guest, and the
+# throughput probe tools/emubench.py runs the same way.
 #
 # The site is served by GitHub Pages, which sends
 # `access-control-allow-origin: *` on every file, so a directory of
@@ -62,7 +63,8 @@ fi
 # nix, so commit before publishing.
 example=$(nix build --no-link --print-out-paths "$root/examples/hello-trynix")
 probe=$(nix build --no-link --print-out-paths "$root#probe")
-published=("$example" "$probe")
+emubench=$(nix build --no-link --print-out-paths "$root#emubench")
+published=("$example" "$probe" "$emubench")
 closure=$(nix path-info --recursive "${published[@]}")
 
 # The whole closure first. `nix copy` will not write one path without
@@ -106,7 +108,8 @@ fi
 public_key=$(nix key convert-secret-to-public < "$secret_key")
 
 # A manifest beside the cache naming what is in it. tools/cpu-test.py
-# reads it rather than carrying a store path and a key of its own, so a
+# and tools/emubench.py read it rather than carrying a store path and a
+# key of their own, so a
 # cache that has drifted from the tree fails saying so instead of
 # fetching a narinfo that is not there.
 cat > "$root/$MANIFEST_PATH" <<EOF
@@ -115,7 +118,8 @@ cat > "$root/$MANIFEST_PATH" <<EOF
   "publicKey": "$public_key",
   "paths": {
     "hello-trynix": "$example",
-    "probe": "$probe"
+    "probe": "$probe",
+    "emubench": "$emubench"
   }
 }
 EOF

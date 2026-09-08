@@ -57,6 +57,18 @@ The patches matter more than the build flags:
   register already held. Only a guest at `Haswell-v4` reaches it;
   x86-64-v1 has no `POPCNT` to emit.
 
+- `0005-wasm32-truncate-multiply-inputs.patch` truncates and extends
+  the inputs of the 32-bit multiplies before the i64 multiply, so a
+  dirty upper register half cannot leak into a product or an overflow
+  flag.
+- `0006-wasm32-batch-chain-locals.patch` replaces the backend's
+  execution model: blocks compile in batches of 64 after a warm-up,
+  each block's helper imports are relinked into the batch's module,
+  compiled blocks tail-call their successors, and guest registers live
+  in wasm locals. It is what makes `opencode --version` 2.4x faster;
+  [engine-execution.md](./engine-execution.md) has the measurements and
+  the design.
+
 Otherwise the emscripten flags are upstream's verbatim (`-sASYNCIFY`,
 `-pthread -sPROXY_TO_PTHREAD`, `-sTOTAL_MEMORY=2300MB`, the xterm-pty
 `--js-library`, `-sEXPORT_ES6`), and the configure line keeps
