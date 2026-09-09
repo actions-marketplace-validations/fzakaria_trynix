@@ -65,7 +65,8 @@ and where the time goes.
 
 ## The GitHub action
 
-`uses: fzakaria/trynix@v1` comments a link on a pull request that boots
+[On the Marketplace](https://github.com/marketplace/actions/trynix-preview). `uses: fzakaria/trynix@v1` comments a
+link on a pull request that boots
 what it built, so a reviewer runs the branch in a tab instead of checking
 it out:
 

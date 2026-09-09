@@ -1,5 +1,7 @@
 # trynix preview action
 
+[![on the GitHub Marketplace](https://img.shields.io/badge/marketplace-trynix%20preview-blue?logo=github)](https://github.com/marketplace/actions/trynix-preview)
+
 Comment a link on a pull request that boots what it built, in the
 reviewer's browser.
 
@@ -220,7 +222,6 @@ it, so build for `x86_64-linux` on a Linux runner.
 | unpacked closure  | page open to a shell |
 | ----------------- | -------------------- |
 | `hello`, 32 MiB   | ~3 s                 |
-| `sqlelf`, 257 MiB | ~10 s                |
 | `nodejs`, 219 MiB | 9 s                  |
 | `llvm`, 739 MiB   | 17 s                 |
 | over ~1.2 GB      | no VM at all         |
@@ -238,6 +239,14 @@ pull request pushes one path and the reviewer fetches the rest from the
 default cache. A closure that is mostly nixpkgs is cheaper than its
 total suggests, and everything large is kept in the browser, so a second
 boot downloads nothing.
+
+Reaching a shell is not the same as running your program, and for
+anything with an interpreter behind it the second number is the larger
+one. sqlelf boots from that 257 MiB closure and then takes over 25
+seconds to print `--help`, because CPython and LIEF are doing their
+imports under emulation. A compiled binary starts in a moment. This is
+worth knowing before you promise a reviewer a quick look: what they wait
+for is the first command, not the prompt.
 
 ## Fork pull requests
 
