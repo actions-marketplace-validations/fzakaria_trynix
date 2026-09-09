@@ -44,7 +44,7 @@ jobs:
 
       - run: nix build .#my-package
 
-      - uses: fzakaria/trynix/action@main
+      - uses: fzakaria/trynix@main
         with:
           # The cache as the browser will see it, and the key it signs
           # with. Any cache that allows cross-origin reads goes here the

@@ -98,7 +98,7 @@ jobs:
       # posts the comment. `prNumber` is read from the event when it is
       # left out, including for this trigger; it is passed anyway so the
       # workflow says which pull request it means.
-      - uses: fzakaria/trynix/action@main
+      - uses: fzakaria/trynix@main
         with:
           cache: https://my-project-previews.cachix.org
           publicKey: my-project-previews.cachix.org-1:0Ma9…

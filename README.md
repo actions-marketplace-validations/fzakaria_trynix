@@ -63,6 +63,31 @@ a package costs no download. On a warm cache a shell is up in about
 three seconds; [design.md](docs/design.md#start-time) has the numbers
 and where the time goes.
 
+## The GitHub action
+
+`uses: fzakaria/trynix@main` comments a link on a pull request that boots
+what it built, so a reviewer runs the branch in a tab instead of checking
+it out:
+
+```yaml
+- uses: cachix/cachix-action@v15
+  with:
+    name: my-cache
+    authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+- run: nix build .#my-package
+- uses: fzakaria/trynix@main
+  with:
+    cache: https://my-cache.cachix.org
+    publicKey: my-cache.cachix.org-1:0Ma9…
+    attrs: .#my-package
+```
+
+It publishes nothing of its own: whatever already fills your cache keeps
+doing it, and the action names the store paths and hands the cache's URL
+and public key to the browser. [action/README.md](action/README.md) has
+the options, the example workflows, and what it costs to give forks a
+preview.
+
 ## Layout
 
 `site/` is the static site: vanilla ES modules, on the multiverse

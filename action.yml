@@ -8,10 +8,10 @@
 # and never a provider. The two things that matter are the same two for
 # every cache: it serves the paths, and it lets a page read them.
 #
-# The work is tools/share-link.py in this repository.
-# `uses: fzakaria/trynix/action@main` checks out the whole repository,
-# not just this directory, which is why the script one level up is there
-# to run.
+# The work is tools/share-link.py, beside this file. The metadata sits at
+# the repository root rather than under action/ because GitHub Marketplace
+# only lists an action.yml in the root; action/ keeps the README and the
+# example workflows.
 name: trynix preview
 description: Boot a pull request's build in the browser, and comment the link
 
@@ -142,9 +142,9 @@ runs:
       run: |
         set -euo pipefail
 
-        script="$GITHUB_ACTION_PATH/../tools/share-link.py"
+        script="$GITHUB_ACTION_PATH/tools/share-link.py"
         if [ ! -f "$script" ]; then
-          echo "::error::$script is missing; use this action as fzakaria/trynix/action@<ref>"
+          echo "::error::$script is missing; use this action as fzakaria/trynix@<ref>"
           exit 1
         fi
 

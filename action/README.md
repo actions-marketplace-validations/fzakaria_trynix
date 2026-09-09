@@ -42,7 +42,7 @@ pattern:
     name: my-cache
     authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 - run: nix build .#my-package
-- uses: fzakaria/trynix/action@main
+- uses: fzakaria/trynix@main
   with:
     cache: https://my-cache.cachix.org
     publicKey: my-cache.cachix.org-1:0Ma9…
@@ -60,7 +60,7 @@ my-cache.cachix.org-1:0Ma9…
 Anywhere else the same two values, pointed somewhere else:
 
 ```yaml
-- uses: fzakaria/trynix/action@main
+- uses: fzakaria/trynix@main
   with:
     cache: https://cache.example.org
     publicKey: cache.example.org-1:5Kq2…
@@ -71,7 +71,7 @@ Several attributes boot together in one VM, which is what you want for a
 server and the client that talks to it:
 
 ```yaml
-- uses: fzakaria/trynix/action@main
+- uses: fzakaria/trynix@main
   with:
     cache: https://my-cache.cachix.org
     publicKey: my-cache.cachix.org-1:0Ma9…
@@ -124,7 +124,7 @@ Outputs are `url`, `paths` and `published`.
 Two steps, and the first is the one that matters.
 
 It calls [tools/share-link.py](../tools/share-link.py) in this
-repository — `uses: fzakaria/trynix/action@<ref>` checks out the whole
+repository — `uses: fzakaria/trynix@<ref>` checks out the whole
 repository, so the script one level up is there to run. That resolves
 each attribute to the store paths it names, asks the cache whether it
 has them and whether a browser may read both the narinfo and the NAR,
@@ -210,6 +210,34 @@ guest's PATH.
 
 The guest is x86_64 Linux. An `aarch64-darwin` build has nothing to run
 it, so build for `x86_64-linux` on a Linux runner.
+
+> The number that decides this is the **unpacked** closure, not the
+> download. NARs are decompressed into the emulator's memory, so a
+> 200 MB download can cost 800 MB of a budget that is about 1.2 GB
+> ([docs/performance.md](../docs/performance.md#memory-and-how-large-a-closure-fits)).
+> Check with `nix path-info -S`.
+
+| unpacked closure  | page open to a shell |
+| ----------------- | -------------------- |
+| `hello`, 32 MiB   | ~3 s                 |
+| `sqlelf`, 257 MiB | ~10 s                |
+| `nodejs`, 219 MiB | 9 s                  |
+| `llvm`, 739 MiB   | 17 s                 |
+| over ~1.2 GB      | no VM at all         |
+
+Under a couple of hundred megabytes a preview feels instant enough that
+a reviewer will actually click it. Past that it still works and the wait
+grows with the closure, which is a judgement call about your reviewers
+rather than a limit. Over the budget the engine cannot instantiate and
+the page fails outright, so a preview of something that large is worse
+than no preview.
+
+Only the paths your cache alone has are a cost you control. sqlelf's
+closure is 29 paths and 28 of them are in cache.nixos.org already, so a
+pull request pushes one path and the reviewer fetches the rest from the
+default cache. A closure that is mostly nixpkgs is cheaper than its
+total suggests, and everything large is kept in the browser, so a second
+boot downloads nothing.
 
 ## Fork pull requests
 
