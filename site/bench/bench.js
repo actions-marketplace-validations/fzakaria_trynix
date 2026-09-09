@@ -50,6 +50,12 @@ const MILESTONES = [
     label:
       "blocks compile in batches, chain by tail call, keep registers in locals",
   },
+  {
+    tag: "engine-20260909-1943",
+    patch: "0007-wasm32-cached-chains-direct-calls-mul64.patch",
+    label:
+      "a jump caches its successor, calls inside a batch go direct, 64-bit multiplies inline",
+  },
 ];
 
 // The suite exec-bench runs, in the order the charts show them.

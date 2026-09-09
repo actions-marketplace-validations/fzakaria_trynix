@@ -155,6 +155,26 @@
         </p>
       </section>
 
+      <section class="change">
+        <h3>The transition</h3>
+        <p class="meta">
+          <a href="https://github.com/fzakaria/trynix/blob/main/patches/0007-wasm32-cached-chains-direct-calls-mul64.patch"
+            >patch 0007</a
+          >
+        </p>
+        <p class="gain">
+          two- and four-block loops 1.5x to 1.9x; <code>opencode --version</code> warm 182 s to
+          173 s here, cold within noise
+        </p>
+        <p>
+          A jump now caches its successor's function index in its own block, a successor in the
+          same batch is called directly behind a guard on the live jump target, chained entries skip
+          the rewind check only dispatcher entries need, and 64-bit multiplies are emitted inline
+          instead of through a helper. The single hot block and the memory tests do not move; the
+          cold-code rows do because they carry an <code>imul</code> per block.
+        </p>
+      </section>
+
       <h2>Appendix</h2>
       <dl id="appendix"></dl>
       <div id="appendix-skipped" class="muted"></div>
