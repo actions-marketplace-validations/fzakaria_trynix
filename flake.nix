@@ -142,6 +142,13 @@
               pkgs.chromium
             ];
 
+          # compose a trynix link for a flake attribute already in some
+          # cache, so a build someone published is a link they can send.
+          # This is what the GitHub action in action/ runs; nix is not a
+          # runtime input, because the caller's nix is the one that
+          # should evaluate the caller's flake.
+          share-link = tool "share-link" "${pkgs.python3}/bin/python3 ${./tools/share-link.py}" [ ];
+
           # measure every published engine on this machine and write the
           # history the site's benchmark page draws (site/bench/). git and
           # nix are for building the site at each commit that repinned.

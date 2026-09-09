@@ -77,7 +77,11 @@ snapshot tool.
 
 `patches/` carries the changes to qemu-wasm the engine is built with.
 `tools/` holds the engine tools, each a flake app (`nix run .#<name>`).
-`tests/` is the node test suite, which runs offline.
+`tests/` is the node test suite, which runs offline. `action/` is a
+GitHub action other projects install: it names the store paths a pull
+request's flake attribute produces, in whatever cache their workflow
+already pushes to, and comments a link that boots them here
+([action/README.md](action/README.md)).
 
 The docs are [design.md](docs/design.md) for the architecture and what
 was measured, [engine.md](docs/engine.md) for building and publishing

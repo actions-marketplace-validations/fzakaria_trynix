@@ -1,0 +1,107 @@
+# A maintainer types `/trynix` on a pull request and gets a preview
+# link, including on a pull request from a fork.
+#
+# `issue_comment` is a repository event, not a pull request event: it
+# runs in the base repository's context with the secrets and a token
+# that can write, and the workflow file is read from the default branch.
+# That last part is worth having — a pull request cannot edit the
+# workflow that builds it, which is not true of `pull_request`.
+#
+# What it does not change is what building means. The checkout below is
+# the fork's code, and a flake runs arbitrary code at evaluation time,
+# before anything is built. Typing `/trynix` is you deciding to run a
+# stranger's code with your cachix token in the environment. Read the
+# diff first. The `if:` and the permission check below decide who is
+# allowed to make that decision; everything after them assumes it was
+# made deliberately.
+name: trynix (on request)
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  preview:
+    # Evaluated before a runner starts, so a comment from a stranger
+    # costs nothing. `issue_comment` fires for issues too, and
+    # `.issue.pull_request` is what separates the two.
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/trynix') &&
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR')
+
+    runs-on: ubuntu-latest
+
+    steps:
+      # author_association is a coarse answer: MEMBER means a member of
+      # the organisation, which is not the same as having write access
+      # to this repository. This asks the question that was meant.
+      - name: The commenter can approve this
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+          permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$ACTOR/permission" --jq .permission)
+          case "$permission" in
+            admin | write) echo "$ACTOR has $permission" ;;
+            *)
+              echo "::error::$ACTOR has $permission access, not write"
+              exit 1
+              ;;
+          esac
+
+      # Say the request was seen, before the slow part.
+      - name: Acknowledge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST \
+            "repos/$GITHUB_REPOSITORY/issues/comments/${{ github.event.comment.id }}/reactions" \
+            -f content=eyes > /dev/null
+
+      # The pull request's own head, which the base repository carries as
+      # refs/pull/<n>/head whether or not the branch is in a fork.
+      #
+      # This is whatever the branch has reached now, not necessarily what
+      # the maintainer was reading when they typed the comment: a
+      # contributor can push between the two. The commit is resolved and
+      # passed to the action, so the comment says which one it built.
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+
+      - name: The commit being built
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - uses: cachix/cachix-action@v15
+        with:
+          name: my-project-previews
+          authToken: ${{ secrets.CACHIX_PREVIEW_TOKEN }}
+
+      - run: nix build .#my-package
+
+      # No token here: the action names what the push step published and
+      # posts the comment. `prNumber` is read from the event when it is
+      # left out, including for this trigger; it is passed anyway so the
+      # workflow says which pull request it means.
+      - uses: fzakaria/trynix/action@main
+        with:
+          cache: https://my-project-previews.cachix.org
+          publicKey: my-project-previews.cachix.org-1:0Ma9…
+          prNumber: ${{ github.event.issue.number }}
+          commit: ${{ steps.commit.outputs.sha }}
+          attrs: .#my-package

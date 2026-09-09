@@ -1,0 +1,54 @@
+# A preview link on every pull request from a branch in this repository.
+# The simple case, and the one to start from.
+#
+# The shape to copy is the order of the last three steps. Something
+# builds, something publishes, and this action names what came out. It
+# does not push, so it needs no token of its own; the token belongs to
+# whatever you already use to fill your cache.
+#
+# cachix/cachix-action pushes in a post-job step, so at the moment this
+# action runs the paths are not in the cache yet and it says so in the
+# log. That is why `verify` defaults to warning rather than failing. If
+# you would rather it were true by then, replace the cachix action with
+# an explicit `cachix push` step and set `verify: fail`.
+#
+# A pull request from a fork gets no link here. `pull_request` never
+# hands a fork's job your secrets, so the push has nothing to
+# authenticate with. Approving the workflow run does not change that:
+# approval decides whether the job runs, not what it can read.
+# examples/fork-auto.yml serves forks, and the README says what it costs.
+name: trynix
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - uses: cachix/cachix-action@v15
+        with:
+          name: my-cache
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - run: nix build .#my-package
+
+      - uses: fzakaria/trynix/action@main
+        with:
+          # The cache as the browser will see it, and the key it signs
+          # with. Any cache that allows cross-origin reads goes here the
+          # same way; cachix is one URL among several.
+          cache: https://my-cache.cachix.org
+          publicKey: my-cache.cachix.org-1:0Ma9…
+          attrs: .#my-package

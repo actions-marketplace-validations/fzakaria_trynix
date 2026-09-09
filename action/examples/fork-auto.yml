@@ -1,0 +1,67 @@
+# A preview link on every pull request, forks included, with nobody
+# pressing anything.
+#
+# `pull_request` hands a fork's job no secrets and a read-only token, and
+# there is no repository setting that changes that for a public
+# repository. `pull_request_target` is the only trigger that runs a
+# fork's pull request in your repository's context, with the secrets. The
+# checkout below is then the contributor's code, and a flake evaluates
+# arbitrary code before it builds anything, so treat everything in this
+# job's environment as readable by that code.
+#
+# Which is why there is exactly one secret here, and it is a cachix
+# per-cache token for a cache that exists only for previews. Make the
+# cache, mint the token from its settings page, and never use its signing
+# key for anything you substitute from. The worst case is then somebody
+# filling a cache nobody reads, and you delete it.
+#
+# `permissions:` keeps GITHUB_TOKEN to reading the repository and
+# commenting. Do not add to this job, and do not merge it into a workflow
+# that holds any other secret. The trynix action itself takes no token —
+# it only names paths and posts a comment — so the exposure here is the
+# push step's, and it is as small as you make that token.
+#
+# One thing to know before turning this on: pull_request_target is not
+# covered by GitHub's "require approval for first-time contributors"
+# setting. It runs for everyone, immediately, on the first pull request a
+# stranger ever opens. If you want a button in front of that, uncomment
+# the `environment:` line and give it required reviewers.
+name: trynix
+
+on:
+  pull_request_target:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    # environment: previews
+
+    steps:
+      # The pull request's own commit. The default for this trigger is
+      # the base branch, which would preview the wrong thing.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - uses: cachix/cachix-action@v15
+        with:
+          name: my-project-previews
+          authToken: ${{ secrets.CACHIX_PREVIEW_TOKEN }}
+
+      - run: nix build .#my-package
+
+      - uses: fzakaria/trynix/action@main
+        with:
+          cache: https://my-project-previews.cachix.org
+          publicKey: my-project-previews.cachix.org-1:0Ma9…
+          commit: ${{ github.event.pull_request.head.sha }}
+          attrs: .#my-package

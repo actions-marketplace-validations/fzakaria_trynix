@@ -1,0 +1,267 @@
+# Comment a link on a pull request that boots what it built.
+#
+# This action does not publish anything. It evaluates the attributes for
+# the store paths they name, checks that the cache you point it at has
+# them and that a browser may read them, and posts the link. Pushing is
+# whatever your workflow already does — cachix/cachix-action, attic, a
+# `nix copy` to an S3 bucket — so a cache is a URL and a public key here
+# and never a provider. The two things that matter are the same two for
+# every cache: it serves the paths, and it lets a page read them.
+#
+# The work is tools/share-link.py in this repository.
+# `uses: fzakaria/trynix/action@main` checks out the whole repository,
+# not just this directory, which is why the script one level up is there
+# to run.
+name: trynix preview
+description: Boot a pull request's build in the browser, and comment the link
+
+branding:
+  icon: play-circle
+  color: blue
+
+inputs:
+  cache:
+    description: >-
+      The binary cache the link tells the browser to fetch from, as a full
+      URL — `https://my-cache.cachix.org`, an attic endpoint, an S3
+      website, a directory of narinfos on a static host. It has to allow
+      cross-origin reads; nothing else about it matters here.
+    required: true
+
+  publicKey:
+    description: >-
+      The public key that vouches for the paths, in `name:base64` form.
+      The browser checks every signature against it, so a link carrying
+      the wrong key does not boot. One per line, for a cache part-way
+      through a key rotation.
+    required: true
+
+  attrs:
+    description: >-
+      Flake attributes, one per line. A package (`.#hello`) or an app
+      (`.#apps.x86_64-linux.hello`); every path lands in the same link, so
+      a server and its client boot in one VM. The guest is x86_64 Linux,
+      so these have to be x86_64-linux builds.
+    required: false
+    default: .#default
+
+  build:
+    description: >-
+      Build the attributes rather than only evaluating them. Off, because
+      the normal shape is a `nix build` step earlier in the same job and a
+      cache step that pushes what it made; evaluation then costs nothing
+      and names the same paths. Turn it on when nothing else builds.
+    required: false
+    default: "false"
+
+  verify:
+    description: >-
+      What to do when the cache does not have every path: `warn` posts
+      the link and says so in the log, `fail` fails the step, `off` does
+      not ask. Warn is the default because a push step that runs after
+      this one has not run yet — cachix/cachix-action pushes at the end
+      of the job — so a missing path here is usually a timing artefact
+      rather than a mistake. A cache a browser cannot read is always a
+      warning, never a failure: that is the cache's problem, not the pull
+      request's.
+    required: false
+    default: warn
+
+  site:
+    description: The trynix deployment to link to.
+    required: false
+    default: https://trynix.dev
+
+  boot:
+    description: >-
+      Link a boot that starts on open rather than on a click. Off by
+      default: a link in a comment should not begin downloading a closure
+      because someone scrolled past it.
+    required: false
+    default: "false"
+
+  comment:
+    description: Post the link as a pull request comment.
+    required: false
+    default: "true"
+
+  prNumber:
+    description: >-
+      The pull request to comment on. Read from the event by default,
+      which covers `pull_request`, `pull_request_target` and
+      `issue_comment`; a `workflow_run` job knows the number by another
+      route and has to pass it.
+    required: false
+    default: ""
+
+  commit:
+    description: >-
+      The commit the link was built from, named in the comment. Worth
+      passing when the trigger does not imply one: a comment-triggered run
+      builds whatever the branch has reached by then, which is not always
+      what the person who asked for it was reading.
+    required: false
+    default: ""
+
+  githubToken:
+    description: The token the comment is posted with.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  url:
+    description: The link that boots this build.
+    value: ${{ steps.link.outputs.url }}
+  paths:
+    description: The store paths in the link, space separated.
+    value: ${{ steps.link.outputs.paths }}
+  published:
+    description: >-
+      "true" when the cache holds every path in the link. "false" when it
+      does not, which with a push step that runs later in the job only
+      means the push has not happened yet.
+    value: ${{ steps.link.outputs.published }}
+
+runs:
+  using: composite
+  steps:
+    # Every input arrives as an environment variable rather than an
+    # expression expanded into the script, so a value with a quote in it
+    # is a bad attribute name and not a shell.
+    - name: Resolve and link
+      id: link
+      shell: bash
+      env:
+        CACHE: ${{ inputs.cache }}
+        PUBLIC_KEY: ${{ inputs.publicKey }}
+        ATTRS: ${{ inputs.attrs }}
+        BUILD: ${{ inputs.build }}
+        VERIFY: ${{ inputs.verify }}
+        SITE: ${{ inputs.site }}
+        BOOT: ${{ inputs.boot }}
+      run: |
+        set -euo pipefail
+
+        script="$GITHUB_ACTION_PATH/../tools/share-link.py"
+        if [ ! -f "$script" ]; then
+          echo "::error::$script is missing; use this action as fzakaria/trynix/action@<ref>"
+          exit 1
+        fi
+
+        arguments=(--cache "$CACHE" --site "$SITE" --json)
+
+        while IFS= read -r attr; do
+          [ -n "$attr" ] || continue
+          arguments+=(--attr "$attr")
+        done <<< "$ATTRS"
+
+        while IFS= read -r key; do
+          [ -n "$key" ] || continue
+          arguments+=(--key "$key")
+        done <<< "$PUBLIC_KEY"
+
+        if [ "$BUILD" = "true" ]; then
+          arguments+=(--build)
+        fi
+        if [ "$BOOT" = "true" ]; then
+          arguments+=(--boot)
+        fi
+        if [ "$VERIFY" != "off" ]; then
+          arguments+=(--verify)
+        fi
+
+        report="$RUNNER_TEMP/trynix.json"
+        python3 "$script" "${arguments[@]}" > "$report"
+
+        {
+          echo "url=$(jq -r .url "$report")"
+          echo "paths=$(jq -r '.paths | join(" ")' "$report")"
+          echo "published=$(jq -r '.missing | length == 0' "$report")"
+          echo "cors=$(jq -r '.cors // ""' "$report")"
+        } >> "$GITHUB_OUTPUT"
+
+        # A cache a browser may not read is reported and never fatal. The
+        # paths are real and the link names them correctly; what is wrong
+        # is a header on somebody else's server.
+        jq -r '.cors // empty | "::warning::" + . + "; the link will fail at boot"' "$report"
+
+        if [ "$VERIFY" = "fail" ] && [ "$(jq -r '.missing | length' "$report")" != "0" ]; then
+          jq -r '.missing[] | "::error::" + . + " is not in the cache"' "$report"
+          exit 1
+        fi
+
+    # One comment per pull request, edited in place. A marker in an HTML
+    # comment is how the comment is found again: nothing else in a thread
+    # is stable across a rerun.
+    - name: Comment
+      if: inputs.comment == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.githubToken }}
+        NUMBER: ${{ inputs.prNumber }}
+        URL: ${{ steps.link.outputs.url }}
+        PATHS: ${{ steps.link.outputs.paths }}
+        CORS: ${{ steps.link.outputs.cors }}
+        COMMIT: ${{ inputs.commit }}
+        MARKER: "<!-- trynix-preview -->"
+      run: |
+        set -euo pipefail
+
+        number="$NUMBER"
+        if [ -z "$number" ]; then
+          # Where the number lives depends on what fired: the pull request
+          # itself, an issue (which is what a comment on a pull request
+          # is), or the bare number some events carry.
+          number=$(jq -r '.pull_request.number // .issue.number // .number // empty' "$GITHUB_EVENT_PATH")
+        fi
+        if [ -z "$number" ]; then
+          echo "::warning::no pull request to comment on"
+          exit 0
+        fi
+
+        body="$RUNNER_TEMP/trynix-comment.md"
+        {
+          echo "$MARKER"
+          echo "### [Boot this build in your browser]($URL)"
+          echo
+          # One line per paragraph: a comment is rendered with hard line
+          # breaks, so a wrapped sentence stays wrapped.
+          echo "A VM in the tab fetches this pull request's closure from the cache and drops you at a shell with it on PATH. Nothing runs on a server, and the link is the environment — send it on."
+          if [ -n "$CORS" ]; then
+            echo
+            echo "> $CORS, so the boot stops at the first download."
+          fi
+          if [ -n "$COMMIT" ]; then
+            echo
+            echo "Built from \`${COMMIT:0:12}\`."
+          fi
+          echo
+          echo "<details><summary>Store paths</summary>"
+          echo
+          echo '```'
+          for path in $PATHS; do
+            echo "$path"
+          done
+          echo '```'
+          echo
+          echo "</details>"
+        } > "$body"
+
+        # jq builds the request rather than a here-string: a comment body
+        # is markdown with quotes and backticks in it.
+        payload="$RUNNER_TEMP/trynix-comment.json"
+        jq -n --rawfile body "$body" '{body: $body}' > "$payload"
+
+        existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$number/comments" --paginate \
+          --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -n 1)
+
+        if [ -n "$existing" ]; then
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" \
+            --input "$payload" > /dev/null
+          echo "updated the comment on #$number"
+          exit 0
+        fi
+
+        gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$number/comments" \
+          --input "$payload" > /dev/null
+        echo "posted a comment on #$number"

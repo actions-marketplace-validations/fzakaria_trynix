@@ -1,0 +1,389 @@
+#!/usr/bin/env python3
+"""Compose a trynix link for a flake attribute someone else published.
+
+A store path alone is not a shareable environment. The browser needs a
+cache that holds the path and a public key that vouches for it, and both
+travel in the same link (docs/design.md, "The link"). This turns
+
+    nix run .#share-link -- --attr .#hello \
+        --cache https://mycache.cachix.org --key mycache-1:...
+
+into
+
+    https://trynix.dev/?path=/nix/store/...-hello&cache=https://mycache.cachix.org+mycache-1:...
+
+which boots that exact build in a browser tab.
+
+Publishing is somebody else's job. By default nothing is built and
+nothing is pushed: the attribute is evaluated for the store path it
+names, on the assumption that an earlier step in the same job built it
+and a cache step pushed it. That keeps this usable with cachix, attic,
+an S3 bucket, a directory of narinfos on a static host, or anything else
+that speaks the binary cache protocol. `--build` builds first, for a
+caller with nothing in front of it.
+
+An attribute may be a package (`.#hello`) or an app
+(`.#apps.x86_64-linux.hello`). An app is a set naming a program rather
+than a derivation, so what lands in the link is the store path holding
+that program, which is what the guest mounts.
+
+`--verify` asks the cache whether it really has each path and whether a
+browser is allowed to read it. Both failures produce a link that dies at
+boot, and the second one cannot be seen any other way: a cache can be
+correct, public, and still unreadable from a page.
+"""
+
+import argparse
+import json
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from urllib.parse import urlencode, urlparse
+
+SITE = "https://trynix.dev"
+
+# A store path's digest is the part before the first dash of its
+# basename, and the name a cache serves its narinfo under.
+DIGEST_LENGTH = 32
+
+STORE_PREFIX = "/nix/store/"
+
+# "", "nix", "store", "<basename>" — a store path split on "/".
+STORE_PATH_PARTS = 4
+
+# What a browser needs on a response to be allowed to read it at all.
+CORS_HEADER = "access-control-allow-origin"
+
+HTTP_TIMEOUT_SECONDS = 30
+
+# Caches behind Cloudflare answer 403 to urllib's default agent. Every
+# request here names the tool instead.
+USER_AGENT = "trynix-share-link"
+
+
+def request(url, method="GET"):
+    """A request the caches will answer, named for what is asking."""
+    return urllib.request.Request(url, method=method, headers={"User-Agent": USER_AGENT})
+
+
+def nix(*args):
+    """Run nix and return its stdout, or exit with the message it gave.
+
+    The caller's nix, deliberately: this script shells out rather than
+    pinning a version, so the flake being built is evaluated by the
+    same nix the caller would have used by hand.
+    """
+    result = subprocess.run(
+        ["nix", *args],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        sys.exit(f"nix {' '.join(args)} failed:\n{result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def is_app(attr):
+    """Whether a flake attribute is an app rather than a derivation.
+
+    Every derivation carries `type = "derivation"` and every flake app
+    carries `type = "app"`, so one evaluation separates them. An
+    attribute with no `type` at all is neither, and nix's own error is
+    the clearest thing to report.
+    """
+    return nix("eval", "--json", f"{attr}.type") == '"app"'
+
+
+def app_program(attr):
+    """The path of the program a flake app runs, without building it."""
+    return nix("eval", "--raw", f"{attr}.program")
+
+
+def containing_store_path(path):
+    """The store path a file inside it belongs to.
+
+    An app's program is `/nix/store/<basename>/bin/<name>`, and the guest
+    mounts the store path, not the file. Everything after the basename is
+    dropped rather than parsed: how deep the program sits is the app's
+    business.
+    """
+    parts = path.split("/")
+    if len(parts) < STORE_PATH_PARTS or not path.startswith(STORE_PREFIX):
+        sys.exit(f"not a path inside the nix store: {path}")
+    return "/".join(parts[:STORE_PATH_PARTS])
+
+
+def evaluated_store_paths(attr):
+    """The store path an attribute names, evaluating and building nothing.
+
+    The default, because the caller's previous step built this and their
+    cache step pushed it; asking nix to build it again would at best be a
+    no-op and at worst pull a closure onto a runner for no reason. An
+    attribute nothing has built still evaluates fine — the path is a
+    function of the inputs — and `--verify` is what notices that no cache
+    has it.
+    """
+    if is_app(attr):
+        return [containing_store_path(app_program(attr))]
+    return [nix("eval", "--raw", f"{attr}.outPath")]
+
+
+def built_store_paths(attr):
+    """Build an attribute and return every output nix installed.
+
+    `nix build` refuses an app, since a set naming a program is not a
+    derivation. The program string carries that derivation in its string
+    context, so the context names the drv to build.
+
+    A multi-output package prints one path per output nix chose to
+    install, and all of them belong in the link: dropping one would drop
+    programs the reader was told they would get. Evaluation cannot see
+    that, which is one reason the two modes can disagree.
+    """
+    if is_app(attr):
+        drv = nix(
+            "eval",
+            "--raw",
+            f"{attr}.program",
+            "--apply",
+            "p: builtins.head (builtins.attrNames (builtins.getContext p))",
+        )
+        return nix("build", f"{drv}^out", "--no-link", "--print-out-paths").splitlines()
+
+    return nix("build", attr, "--no-link", "--print-out-paths").splitlines()
+
+
+def store_paths(attr, build):
+    """The store paths an attribute resolves to."""
+    if build:
+        return built_store_paths(attr)
+    return evaluated_store_paths(attr)
+
+
+def normalize_cache_url(cache):
+    """The cache URL as the link should carry it.
+
+    Only the trailing slash is taken off, because the page joins the URL
+    to a digest with a slash of its own and a doubled one would ask for a
+    path no cache serves. Nothing else is inferred: the caller names a
+    cache and the key that signed the paths, and a provider is not
+    something this needs to know about.
+    """
+    if not cache.startswith("http"):
+        sys.exit(f"--cache wants a URL, got {cache!r}")
+    return cache.rstrip("/")
+
+
+def digest_of(path):
+    """The cache's name for a store path: the digest of its basename."""
+    return path[len(STORE_PREFIX) :][:DIGEST_LENGTH]
+
+
+def readable(url):
+    """Headers a browser would see for this URL, or None if unreachable.
+
+    A ranged GET rather than a HEAD: a cache may answer the two with
+    different headers, and only a GET is what a page does. One byte is
+    enough to see the response headers.
+    """
+    request_ = request(url)
+    request_.add_header("Range", "bytes=0-0")
+    try:
+        with urllib.request.urlopen(request_, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            return response.headers
+    except urllib.error.HTTPError as err:
+        return err.headers
+    except urllib.error.URLError:
+        return None
+
+
+def head(url):
+    """Status and headers for a URL, or None when it cannot be reached.
+
+    HEAD is right for asking whether a path is in a cache at all, which
+    is a question about the status line. Anything about headers a browser
+    would see wants `readable` instead.
+    """
+    try:
+        with urllib.request.urlopen(
+            request(url, method="HEAD"), timeout=HTTP_TIMEOUT_SECONDS
+        ) as response:
+            return response.status, response.headers
+    except urllib.error.HTTPError as err:
+        return err.code, err.headers
+    except urllib.error.URLError:
+        return None
+
+
+def fetch_narinfo(cache_url, digest):
+    """A path's narinfo as parsed key/value pairs, or None if absent."""
+    try:
+        with urllib.request.urlopen(
+            request(f"{cache_url}/{digest}.narinfo"), timeout=HTTP_TIMEOUT_SECONDS
+        ) as response:
+            text = response.read().decode()
+    except urllib.error.URLError:
+        return None
+
+    fields = {}
+    for line in text.splitlines():
+        key, _, value = line.partition(": ")
+        fields[key] = value
+    return fields
+
+
+def missing_from_cache(cache_url, paths):
+    """The paths the cache does not serve a narinfo for."""
+    missing = []
+    for path in paths:
+        answer = head(f"{cache_url}/{digest_of(path)}.narinfo")
+        if answer is None or answer[0] != 200:
+            missing.append(path)
+    return missing
+
+
+def cors_problem(cache_url, paths):
+    """Why a browser could not read this cache, or None when it can.
+
+    Being present is not enough: a page may only fetch what the cache
+    lets it, and the narinfo and the NAR are separate routes that can
+    disagree: a cache that answers narinfos with
+    `access-control-allow-origin` and NARs without one walks the closure
+    and then fails on the first download.
+    """
+    for path in paths:
+        digest = digest_of(path)
+
+        headers = readable(f"{cache_url}/{digest}.narinfo")
+        if headers is None:
+            continue
+        if headers.get(CORS_HEADER) is None:
+            return f"{cache_url} serves narinfos without {CORS_HEADER}"
+
+        # The NAR URL is relative to the cache that served the narinfo,
+        # and it is the route that has to allow the read as well.
+        narinfo = fetch_narinfo(cache_url, digest)
+        if narinfo is None or "URL" not in narinfo:
+            continue
+        headers = readable(f"{cache_url}/{narinfo['URL']}")
+        if headers is None:
+            continue
+        if headers.get(CORS_HEADER) is None:
+            return f"{cache_url} serves NARs without {CORS_HEADER}"
+
+        # One path answers for the cache; the routes are the same for
+        # every path it holds.
+        return None
+
+    return None
+
+
+def link(site, paths, cache_url, keys, boot):
+    """The trynix URL for these paths, fetched from this cache.
+
+    Every parameter may repeat, and a cache is one value of "url key"
+    with whitespace between, so a cache mid-key-rotation contributes
+    one entry per key and the page picks whichever signed the narinfo.
+    """
+    params = [("path", path) for path in paths]
+    params += [("cache", f"{cache_url} {key}") for key in keys]
+    if boot:
+        params.append(("boot", "1"))
+
+    # `/` and `:` are legal in a query string and are most of what a
+    # store path and a cache URL are made of; leaving them alone is the
+    # difference between a link someone can read and a wall of %2F.
+    return f"{site.rstrip('/')}/?{urlencode(params, safe='/:')}"
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="compose a trynix link for what a flake attribute builds"
+    )
+    parser.add_argument(
+        "--attr",
+        action="append",
+        required=True,
+        metavar="ATTR",
+        help="a flake attribute to build, package or app; may repeat",
+    )
+    parser.add_argument(
+        "--cache",
+        required=True,
+        help="the URL of a cache that allows cross-origin reads",
+    )
+    parser.add_argument(
+        "--key",
+        action="append",
+        required=True,
+        metavar="KEY",
+        help="a public key the cache signs with, name:base64; may repeat",
+    )
+    parser.add_argument("--site", default=SITE, help=f"the site to link to ({SITE})")
+    parser.add_argument(
+        "--boot", action="store_true", help="link a boot that starts without a click"
+    )
+    parser.add_argument(
+        "--build",
+        action="store_true",
+        help="build the attributes first, rather than only evaluating them",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="check the cache holds the paths and a browser may read them",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="print the link and what went into it"
+    )
+    args = parser.parse_args()
+
+    # Resolve first: an attribute that does not exist should say so
+    # before anything is asked of the network.
+    paths = []
+    by_attr = {}
+    for attr in args.attr:
+        resolved = store_paths(attr, args.build)
+        by_attr[attr] = resolved
+        paths += resolved
+
+    cache_url = normalize_cache_url(args.cache)
+    keys = args.key
+
+    # Verification reports rather than fails: a caller who has not
+    # pushed yet still wants the link, and the action decides what a
+    # missing path means for a comment.
+    missing = []
+    cors = None
+    if args.verify:
+        missing = missing_from_cache(cache_url, paths)
+        cors = cors_problem(cache_url, [p for p in paths if p not in missing])
+        for path in missing:
+            print(f"warning: {cache_url} does not have {path}", file=sys.stderr)
+        if cors is not None:
+            print(f"warning: {cors}; a browser cannot boot this", file=sys.stderr)
+
+    url = link(args.site, paths, cache_url, keys, args.boot)
+
+    if args.json:
+        json.dump(
+            {
+                "url": url,
+                "paths": paths,
+                "attrs": by_attr,
+                "cache": {"url": cache_url, "keys": keys},
+                "missing": missing,
+                "cors": cors,
+            },
+            sys.stdout,
+            indent=1,
+        )
+        print()
+        return
+
+    print(url)
+
+
+if __name__ == "__main__":
+    main()
