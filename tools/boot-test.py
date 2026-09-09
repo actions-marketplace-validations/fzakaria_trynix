@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Boot the site in a real browser, repeatedly, and fail if it hangs.
 
+Also fails a boot that reaches a shell and then litters the console
+with the spare handshake newlines the page sent while the guest was
+mounting: see PROMPT below.
+
 Everything else in the tree checks that the pieces are the right bytes.
 Nothing checked the one thing a reader actually does: open the page and
 wait for a shell. Two separate bugs shipped through that gap, both of
@@ -52,6 +56,25 @@ DEFAULT_RUNS = 10
 DEFAULT_PACKAGE = "hello"
 
 POLL_SECONDS = 0.15
+
+# What the guest's shell prints when it wants a command.
+#
+# Reaching a shell is not enough: resuming offers init's handshake
+# newline over and over until the guest says it has mounted, and only
+# the first of them is read. The rest sit in the console's input queue
+# and reach the shell as empty command lines, one bare prompt each.
+# The slower the machine the more of them there are -- a phone that
+# takes fifteen seconds to mount collects fifty -- and they scroll past
+# the reader after the page has handed the console over. Count what the
+# shell prints once it is up, and allow only the prompt it starts with
+# and the one the page's redraw asks for.
+PROMPT = "~ # "
+MAX_PROMPTS = 3
+
+# How long the guest is watched after it reaches its prompt: the spare
+# newlines are already in its input queue by then, so whatever they are
+# going to print has printed by the end of this.
+DRAIN_SECONDS = 3
 
 
 def free_port():
@@ -182,19 +205,30 @@ class Browser:
         shutil.rmtree(self.profile, ignore_errors=True)
 
 
+def read_transcript(browser):
+    """Everything the guest has said so far, as the page has it."""
+    return (
+        browser.evaluate(
+            "(window.trynix && window.trynix.transcript "
+            "&& window.trynix.transcript()) || ''"
+        )
+        or ""
+    )
+
+
 def boot_once(binary, url, limit, workdir, index):
-    """Time one cold boot; returns seconds, or None if it never arrived."""
+    """Time one cold boot; returns (seconds, prompts), or None if it hung."""
     browser = Browser(binary, os.path.join(workdir, f"profile-{index}"))
     try:
         started = time.monotonic()
         browser.send("Page.navigate", url=url)
         while time.monotonic() - started < limit:
-            transcript = browser.evaluate(
-                "(window.trynix && window.trynix.transcript "
-                "&& window.trynix.transcript()) || ''"
-            )
-            if transcript and READY_MARKER in transcript:
-                return time.monotonic() - started
+            transcript = read_transcript(browser)
+            if READY_MARKER in transcript:
+                taken = time.monotonic() - started
+                time.sleep(DRAIN_SECONDS)
+                tail = read_transcript(browser).split(READY_MARKER, 1)[-1]
+                return taken, tail.count(PROMPT)
             time.sleep(POLL_SECONDS)
         return None
     finally:
@@ -230,16 +264,27 @@ def main():
 
     times = []
     stalls = 0
+    noisy = 0
     with tempfile.TemporaryDirectory() as workdir:
         try:
             for index in range(args.runs):
-                taken = boot_once(args.browser, url, args.limit, workdir, index)
-                if taken is None:
+                result = boot_once(args.browser, url, args.limit, workdir, index)
+                if result is None:
                     stalls += 1
                     print(f"  boot {index + 1}: NO SHELL within {args.limit:g}s", flush=True)
-                else:
-                    times.append(taken)
-                    print(f"  boot {index + 1}: {taken:.1f}s", flush=True)
+                    continue
+
+                taken, prompts = result
+                times.append(taken)
+                if prompts > MAX_PROMPTS:
+                    noisy += 1
+                    print(
+                        f"  boot {index + 1}: {taken:.1f}s, "
+                        f"{prompts} prompts (at most {MAX_PROMPTS} expected)",
+                        flush=True,
+                    )
+                    continue
+                print(f"  boot {index + 1}: {taken:.1f}s", flush=True)
         finally:
             if shutdown:
                 shutdown()
@@ -252,6 +297,8 @@ def main():
         )
     if stalls:
         sys.exit(f"{stalls} of {args.runs} boots never reached a shell")
+    if noisy:
+        sys.exit(f"{noisy} of {args.runs} boots left spare prompts on the console")
     print("every boot reached a shell")
 
 

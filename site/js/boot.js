@@ -62,16 +62,9 @@ const GUEST_STORE_DIR = "/nix/store";
 // until something sets one: TIOCGWINSZ answers 0x0, and a full-screen
 // program (btop: "Failed to get size of terminal!") refuses to start.
 // The browser's resize events reach the line discipline and stop
-// there; nothing carries them into a 16550. `resize` is how a serial
-// console has always learned its size — it parks the cursor in the
-// far corner, asks the terminal where that landed, and sets the tty
-// from the answer — and ghostty answers it. The handshake's spare
-// newlines (see resume) are still queued on the tty at this point and
-// would be read as that answer, so they are drained first: with
-// canonical mode off and a 0.2 s read timeout, `cat` takes what is
-// queued and gets end-of-file when nothing more comes. (busybox's
-// `read -t` takes whole seconds only, and a whole second is too long
-// to wait at every boot.)
+// there; nothing carries them into a 16550, so the page states the
+// size it laid the terminal out at (`stty rows cols`, below) and
+// writes every later size into the share for the loop below to apply.
 //
 // TERM is xterm-256color rather than ghostty's own xterm-ghostty: the
 // guest's programs look the name up in the terminfo their own ncurses
@@ -130,13 +123,44 @@ const STORE_DEPENDENCY = "trynix-store";
 // long the page will watch for it.
 const READY_MARKER = "trynix: waiting for the store";
 const MOUNTED_MARKER = "trynix: welcome to the multiverse";
+// What QEMU says when the restored machine starts running, and the
+// option that makes it say it.
+//
+// None of QEMU's normal output says when the stream has finished
+// loading. Its trace log does: the engine carries the log trace
+// backend, so enabling one event prints one line to stderr, and stderr
+// is the console the page is already reading. vm_start() on the
+// incoming side is the moment the machine can keep a byte.
+//
+// The option rides on the resume path alone rather than in
+// nix/guest/machine.json, which describes the machine both ends of the
+// migration have to agree about and whose hash the snapshot pins carry.
+const RESUMED_TRACE_EVENT = "vm_state_notify";
+const RESUMED_MARKER = "vm_state_notify running 1";
+// How long that line is waited for before the page falls back to
+// offering newlines blind, as it did before it could ask.
+const RESUMED_TIMEOUT_MS = 10000;
+
+// What the page writes while the stream is loading, and how often.
+//
+// The engine's main loop sleeps until an event reaches it, and the
+// stream is read by a coroutine that only runs when that loop turns,
+// so the load is paced by whatever the page writes: a page that waits
+// in silence for QEMU to say the machine is running waits ten seconds
+// for a load that takes 120 ms under a page that keeps typing. A space
+// rather than a newline because init's `read` throws away the line it
+// takes, so the guest never sees these as a command. Below 50 ms the
+// load stops getting faster.
+const PUMP = " ";
+const PUMP_MS = 50;
 
 const TRANSCRIPT_LIMIT = 65536;
-// How often the resuming guest is offered its newline.
+// How often a guest QEMU never spoke for is offered its newline.
 const RESUME_POLL_MS = 300;
-// How long the console must be quiet after the guest mounts before the
-// spare handshake newlines are taken to have all arrived.
+// How long the console must say nothing before the guest is taken to
+// have finished coming up, and how long that is waited for at most.
 const SETTLE_MS = 400;
+const SETTLE_LIMIT_MS = 3000;
 
 // Ctrl-L: the shell's line editor clears its screen and draws the
 // prompt again. Clearing the terminal from this side wipes the prompt
@@ -240,7 +264,13 @@ export async function startVM({
   const args =
     snapshot === null
       ? qemuArgs(machine)
-      : ["-incoming", `file:${SNAPSHOT_FILE}`, ...qemuArgs(machine)];
+      : [
+          "-incoming",
+          `file:${SNAPSHOT_FILE}`,
+          "-trace",
+          `enable=${RESUMED_TRACE_EVENT}`,
+          ...qemuArgs(machine),
+        ];
 
   // preRun hands the module out once its filesystem exists.
   let onFilesystem;
@@ -399,28 +429,40 @@ async function coldBoot(console_, master, terminal) {
 // keystroke, and spent three seconds of every resume on it.
 //
 // The guest is parked on init's read, exactly where the snapshot
-// caught it, so one newline finishes the handshake — but a newline
-// sent while QEMU is still loading the stream is lost, and nothing
-// says when loading is done. So newlines are offered every
-// RESUME_POLL_MS until the guest has mounted the share and said so.
+// caught it, and one newline finishes the handshake. Two things make
+// that less simple than it sounds: a newline sent while the stream is
+// still loading is lost, since the UART it lands in is overwritten by
+// the restored device state, and the load only advances while the page
+// is writing (PUMP). So the page writes spaces, which init's read
+// takes as part of the handshake line and throws away, until QEMU says
+// the machine is running — then the newline that ends that line, once.
 //
-// Waiting for the console to show anything at all is not good enough,
-// and stopping on that is what wedged this: the line discipline echoes
-// every newline straight back, so the console has output before the
-// guest has read a byte. A poll stopped on the strength of that echo
-// leaves a guest still parked on its read with nothing left to wake
-// it, and the boot then sits out the page's whole handshake timeout.
-// The spare newlines queue in the UART and reach the shell as bare
-// prompts, which the clear below removes.
+// The poll below is the net under an engine whose trace log does not
+// carry that event, and boot-test fails a boot that needs it.
 async function resume(console_, master, terminal) {
-  const poll = setInterval(() => sendLine(master), RESUME_POLL_MS);
+  // Started before anything is sent, so that a guest that never says
+  // anything costs one handshake timeout rather than several.
+  const mounted = console_.waitFor(MOUNTED_MARKER);
+
+  // Carry the stream's load, then end the handshake line.
+  const pump = setInterval(() => send(master, PUMP), PUMP_MS);
+  send(master, PUMP);
+  const running = await appeared(console_, RESUMED_MARKER, RESUMED_TIMEOUT_MS);
+  clearInterval(pump);
   sendLine(master);
-  await console_.waitFor(MOUNTED_MARKER);
-  clearInterval(poll);
+  const poll = running
+    ? null
+    : setInterval(() => sendLine(master), RESUME_POLL_MS);
+  await mounted;
+  if (poll !== null) {
+    clearInterval(poll);
+  }
 
   // Drop what the guest said on the way up; the reader starts at a
-  // prompt.
-  await quiet(SETTLE_MS);
+  // prompt. Waiting for silence rather than for a fixed delay is what
+  // keeps whatever the guest is still writing from landing after the
+  // clear instead of being wiped by it.
+  await settled(console_, SETTLE_MS);
   terminal.clear();
   send(master, REDRAW_PROMPT);
 }
@@ -433,7 +475,30 @@ function send(master, data) {
 
 const sendLine = (master) => send(master, "\n");
 
-const quiet = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Whether `marker` turns up within `ms`.
+async function appeared(console_, marker, ms) {
+  return Promise.race([
+    console_.waitFor(marker).then(() => true),
+    pause(ms).then(() => false),
+  ]);
+}
+
+// Resolves once the guest has said nothing for `ms` — or after
+// SETTLE_LIMIT_MS, since a guest that never stops talking is still a
+// guest the reader should be given.
+async function settled(console_, ms) {
+  const deadline = Date.now() + SETTLE_LIMIT_MS;
+  for (;;) {
+    const idle = console_.quietFor();
+    const left = deadline - Date.now();
+    if (idle >= ms || left <= 0) {
+      return;
+    }
+    await pause(Math.min(ms - idle, left));
+  }
+}
 
 // Everything the guest has written, and a way to wait for a line in it.
 //
@@ -442,16 +507,13 @@ const quiet = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // run.
 function watchConsole(master) {
   let transcript = "";
+  let spokeAt = Date.now();
   const waiters = [];
 
   const decoder = new TextDecoder();
 
-  const outputWaiters = [];
-
   master.onWrite(([data]) => {
-    for (const resolve of outputWaiters.splice(0)) {
-      resolve();
-    }
+    spokeAt = Date.now();
     // The pty emits either a string or raw bytes depending on what the
     // guest wrote; concatenating the bytes directly would stringify the
     // array and match no marker ever again.
@@ -472,12 +534,8 @@ function watchConsole(master) {
   return {
     transcript: () => transcript,
 
-    // Resolves the next time the guest writes anything at all.
-    waitForOutput() {
-      return new Promise((resolve) => {
-        outputWaiters.push(resolve);
-      });
-    },
+    // How long the console has said nothing (see settled).
+    quietFor: () => Date.now() - spokeAt,
 
     // Resolves when the marker has been seen, and gives up quietly
     // after HANDSHAKE_TIMEOUT_MS: a guest this far off script has a
