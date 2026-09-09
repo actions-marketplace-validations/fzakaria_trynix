@@ -68,6 +68,15 @@ The patches matter more than the build flags:
   in wasm locals. It is what makes `opencode --version` 2.4x faster;
   [engine-execution.md](./engine-execution.md) has the measurements and
   the design.
+- `0007-wasm32-cached-chains-direct-calls-mul64.patch` trims the block
+  transition on top of 0006: a direct jump caches its successor's
+  function index in its own translation block, a successor in the same
+  batch is called with a direct `return_call` behind a guard, chained
+  entries skip the rewind bookkeeping only dispatcher entries need, and
+  64-bit multiplies are emitted inline instead of through a helper.
+  Multi-block loops run 1.5x to 2x faster than under 0006 alone;
+  [engine-execution.md](./engine-execution.md#the-follow-up-patch-0007)
+  has the numbers.
 
 Otherwise the emscripten flags are upstream's verbatim (`-sASYNCIFY`,
 `-pthread -sPROXY_TO_PTHREAD`, `-sTOTAL_MEMORY=2300MB`, the xterm-pty

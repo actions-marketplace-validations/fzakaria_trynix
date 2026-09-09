@@ -399,6 +399,30 @@ static uint64_t asm_mul_full(uint64_t a, uint64_t b, uint64_t *high)
     return low;
 }
 
+/* The signed one-operand multiply: the 128-bit signed product, high
+ * half in rdx. The emulator computes that half separately from the
+ * unsigned one, so mul passing says nothing about this. */
+static uint64_t asm_imul_full(uint64_t a, uint64_t b, uint64_t *high)
+{
+    uint64_t low;
+    __asm__ volatile("imulq %[b]" : "=a"(low), "=d"(*high) : "a"(a), [b] "r"(b) : "cc");
+    return low;
+}
+
+/* The two-operand signed multiply keeps the low half and reports in OF
+ * whether the high half was anything but the sign extension of it; the
+ * emulator derives that flag from the same high half. */
+static uint64_t asm_imul_overflow(uint64_t a, uint64_t b, uint64_t *overflow)
+{
+    unsigned char of;
+    __asm__ volatile("imulq %[b], %[a]\n\tseto %[of]"
+                     : [a] "+r"(a), [of] "=q"(of)
+                     : [b] "r"(b)
+                     : "cc");
+    *overflow = of;
+    return a;
+}
+
 /* And the divide, which reads a 128-bit dividend from the same pair.
  * The high word is kept below the divisor so the quotient fits and the
  * CPU does not fault instead of answering. */
@@ -679,6 +703,19 @@ int main(void)
         __uint128_t product = (__uint128_t)x * (__uint128_t)other;
         check("mul.lo", x, low, (uint64_t)product);
         check("mul.hi", x, high, (uint64_t)(product >> 64));
+
+        /* The signed product, both halves, and the overflow flag the
+         * two-operand form derives from the high half. */
+        __int128 sproduct = (__int128)(int64_t)x * (__int128)(int64_t)other;
+        uint64_t shigh = 0;
+        uint64_t slow = asm_imul_full(x, other, &shigh);
+        check("imul.lo", x, slow, (uint64_t)sproduct);
+        check("imul.hi", x, shigh, (uint64_t)(sproduct >> 64));
+        uint64_t overflow = 0;
+        uint64_t narrow = asm_imul_overflow(x, other, &overflow);
+        check("imul2.lo", x, narrow, (uint64_t)sproduct);
+        check("imul2.of", x, overflow,
+              sproduct != (__int128)(int64_t)(uint64_t)sproduct);
 
         /* Divide a 128-bit value whose high word is small enough that the
          * quotient fits in 64 bits. */
