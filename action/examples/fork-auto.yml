@@ -59,7 +59,7 @@ jobs:
 
       - run: nix build .#my-package
 
-      - uses: fzakaria/trynix@main
+      - uses: fzakaria/trynix@v1
         with:
           cache: https://my-project-previews.cachix.org
           publicKey: my-project-previews.cachix.org-1:0Ma9…

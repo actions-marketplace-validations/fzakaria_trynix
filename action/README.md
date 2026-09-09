@@ -42,7 +42,7 @@ pattern:
     name: my-cache
     authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 - run: nix build .#my-package
-- uses: fzakaria/trynix@main
+- uses: fzakaria/trynix@v1
   with:
     cache: https://my-cache.cachix.org
     publicKey: my-cache.cachix.org-1:0Ma9…
@@ -60,7 +60,7 @@ my-cache.cachix.org-1:0Ma9…
 Anywhere else the same two values, pointed somewhere else:
 
 ```yaml
-- uses: fzakaria/trynix@main
+- uses: fzakaria/trynix@v1
   with:
     cache: https://cache.example.org
     publicKey: cache.example.org-1:5Kq2…
@@ -71,7 +71,7 @@ Several attributes boot together in one VM, which is what you want for a
 server and the client that talks to it:
 
 ```yaml
-- uses: fzakaria/trynix@main
+- uses: fzakaria/trynix@v1
   with:
     cache: https://my-cache.cachix.org
     publicKey: my-cache.cachix.org-1:0Ma9…

@@ -253,15 +253,24 @@ runs:
         jq -n --rawfile body "$body" '{body: $body}' > "$payload"
 
         existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$number/comments" --paginate \
-          --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -n 1)
+          --jq ".[] | select(.body | startswith(\"$MARKER\")) | .id" 2>/dev/null | head -n 1) || true
 
         if [ -n "$existing" ]; then
-          gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" \
-            --input "$payload" > /dev/null
-          echo "updated the comment on #$number"
+          method=PATCH
+          target="repos/$GITHUB_REPOSITORY/issues/comments/$existing"
+        else
+          method=POST
+          target="repos/$GITHUB_REPOSITORY/issues/$number/comments"
+        fi
+
+        # Commenting is the last thing this does and never a reason to
+        # fail. A pull request from a fork carries a read-only token, so
+        # the write comes back 403 — the build was fine, and a preview
+        # nobody could post is not the pull request's fault. The link
+        # goes in the log so the run still carries it.
+        if gh api --method "$method" "$target" --input "$payload" > /dev/null; then
+          echo "commented on #$number"
           exit 0
         fi
 
-        gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$number/comments" \
-          --input "$payload" > /dev/null
-        echo "posted a comment on #$number"
+        echo "::warning::could not comment on #$number (a fork's token cannot write); the link is $URL"

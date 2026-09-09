@@ -65,7 +65,7 @@ and where the time goes.
 
 ## The GitHub action
 
-`uses: fzakaria/trynix@main` comments a link on a pull request that boots
+`uses: fzakaria/trynix@v1` comments a link on a pull request that boots
 what it built, so a reviewer runs the branch in a tab instead of checking
 it out:
 
@@ -75,7 +75,7 @@ it out:
     name: my-cache
     authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 - run: nix build .#my-package
-- uses: fzakaria/trynix@main
+- uses: fzakaria/trynix@v1
   with:
     cache: https://my-cache.cachix.org
     publicKey: my-cache.cachix.org-1:0Ma9…
