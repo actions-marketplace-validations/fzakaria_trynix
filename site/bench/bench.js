@@ -72,8 +72,12 @@ const CLASSES = [
 const SERIES_COLORS = ["var(--series-1)", "var(--series-2)"];
 const PANEL_WIDTH = 320;
 const PANEL_HEIGHT = 200;
-// the top band holds the title, its subtitle, and the milestone numerals
-const MARGIN = { top: 42, right: 12, bottom: 28, left: 44 };
+// the top band holds the title, its subtitle, and the milestone numerals.
+// the left band holds the y tick labels and nothing else, so it is only as
+// wide as the widest one ("1.25", 24 units) plus TICK_LABEL_GAP: any wider
+// and the plot sits visibly off-centre once a panel is a whole phone screen.
+const MARGIN = { top: 42, right: 12, bottom: 28, left: 32 };
+const TICK_LABEL_GAP = 6;
 const TITLE_Y = 12;
 const SUBTITLE_Y = 25;
 const MIN_TICK_GAP = 44;
@@ -256,7 +260,7 @@ function panel(title, subtitle, records, series, unit, tooltipHost) {
       el(
         "text",
         {
-          x: MARGIN.left - 6,
+          x: MARGIN.left - TICK_LABEL_GAP,
           y: y(value) + 3,
           class: "tick",
           "text-anchor": "end",
@@ -318,14 +322,11 @@ function panel(title, subtitle, records, series, unit, tooltipHost) {
   });
 
   // the title and what the panel isolates, and a direct label on each
-  // series' last point
+  // series' last point. the header sits flush with the panel's left edge,
+  // not the plot's, so it lines up with the prose above the grid.
+  svg.append(el("text", { x: 0, y: TITLE_Y, class: "title" }, [title]));
   svg.append(
-    el("text", { x: MARGIN.left, y: TITLE_Y, class: "title" }, [title]),
-  );
-  svg.append(
-    el("text", { x: MARGIN.left, y: SUBTITLE_Y, class: "subtitle" }, [
-      subtitle,
-    ]),
+    el("text", { x: 0, y: SUBTITLE_Y, class: "subtitle" }, [subtitle]),
   );
   if (series.length > 1) {
     const ends = series
