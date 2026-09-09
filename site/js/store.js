@@ -36,18 +36,26 @@ function serialize(work) {
   return result;
 }
 
-// The compressed bytes against what the narinfo promised: the size,
-// which catches a download that ended short, and the hash, which
-// catches everything else. Null means good; otherwise the reason.
-async function verifyCompressed(info, bytes) {
+// What the narinfo claims about the compressed file, against what
+// arrived. Null when they agree, otherwise a description.
+//
+// Never a reason to refuse the bytes, which is the whole point of
+// keeping it separate from the checks below. FileSize and FileHash
+// describe whichever compression the cache happens to be serving, and
+// they sit outside the fingerprint it signs (substituters.js), so a
+// cache that recompresses a path leaves them stale while the archive
+// inside is the same content someone vouched for. cache.nixos.org has
+// done exactly that: glibc-2.40-224's narinfo says 9096823 bytes for a
+// file it serves 9099653 of, and its NarHash matches to the byte.
+// Refusing that rejects provably genuine content over the one field no
+// signature covers.
+//
+// It still goes in the log, because the same drift is what a download
+// that ended short looks like, and the difference between the two shows
+// up in NarSize and NarHash a moment later.
+function compressedDrift(info, bytes) {
   if (info.fileSize > 0 && bytes.byteLength !== info.fileSize) {
-    return `${bytes.byteLength} bytes, narinfo says ${info.fileSize}`;
-  }
-  if (info.fileHash !== undefined) {
-    const ok = await verifyHash(bytes, info.fileHash);
-    if (ok === false) {
-      return "sha256 does not match the narinfo";
-    }
+    return `${bytes.byteLength} compressed bytes, narinfo says ${info.fileSize}`;
   }
   return null;
 }
@@ -55,13 +63,14 @@ async function verifyCompressed(info, bytes) {
 // The unpacked archive against what the narinfo promised: NarSize,
 // then NarHash. Null means good; otherwise the reason.
 //
-// Both have caught real failures. A download that ended short decoded
-// as far as it went and the parser ran off its end (the size). And the
-// xz decoder handed out views into its own memory that the next chunk
-// overwrote, so the archive had the right length and wrong bytes, and
-// the parser found machine code where a NAR token should be (the
-// hash; patches/xzwasm/ fixes the decoder, and the hash is what says
-// so if it ever comes back).
+// These two decide whether a boot proceeds, because these two are what
+// a cache signs. Both have caught real failures. A download that ended
+// short decoded as far as it went and the parser ran off its end (the
+// size). And the xz decoder handed out views into its own memory that
+// the next chunk overwrote, so the archive had the right length and
+// wrong bytes, and the parser found machine code where a NAR token
+// should be (the hash; patches/xzwasm/ fixes the decoder, and the hash
+// is what says so if it ever comes back).
 async function verifyUnpacked(info, nar) {
   if (info.narSize > 0 && nar.byteLength !== info.narSize) {
     return `unpacked to ${nar.byteLength} bytes, narinfo says ${info.narSize}`;
@@ -93,13 +102,26 @@ export async function fetchNar(info, onBytes) {
   const url = `${info.substituter ?? CACHE_URL}/${info.url}`;
 
   for (let attempt = 1; ; attempt += 1) {
-    const compressed = await fetchWithProgress(url, {
-      onBytes,
-      verify: (bytes) => verifyCompressed(info, bytes),
-    });
-    const nar = await decompress(info, compressed);
+    const compressed = await fetchWithProgress(url, { onBytes });
 
-    const problem = await verifyUnpacked(info, nar);
+    const drift = compressedDrift(info, compressed);
+    if (drift !== null) {
+      log(`${info.storePath}: ${drift}`);
+    }
+
+    // A decode that throws and an archive that verifies wrong are the
+    // same event as far as this loop is concerned: bytes that cannot be
+    // used, and must not stay in the cache for every later visit to
+    // fail on. Truncated compressed streams arrive as the first and
+    // used to escape without the eviction below.
+    let nar = null;
+    let problem = null;
+    try {
+      nar = await decompress(info, compressed);
+      problem = await verifyUnpacked(info, nar);
+    } catch (err) {
+      problem = err.message;
+    }
     if (problem === null) {
       return parse(info, nar);
     }
@@ -144,9 +166,7 @@ async function decompress(info, compressed) {
       log(
         `failed to decompress ${info.url} (${info.compression}): ${err.message}`,
       );
-      throw new Error(
-        `${info.storePath}: ${info.compression} decode failed: ${err.message}`,
-      );
+      throw new Error(`${info.compression} decode failed: ${err.message}`);
     }
   });
 }

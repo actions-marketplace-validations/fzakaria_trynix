@@ -30,8 +30,10 @@ export function parseNarinfo(text) {
     storePath: fields.StorePath,
     url: fields.URL,
     compression: fields.Compression,
+    // FileSize is what the progress bars are priced in, and what
+    // store.js reports drifting. FileHash is deliberately not carried:
+    // nothing may act on it, since no signature covers it.
     fileSize: Number(fields.FileSize ?? 0),
-    fileHash: fields.FileHash,
     narSize: Number(fields.NarSize ?? 0),
     narHash: fields.NarHash,
     sigs,

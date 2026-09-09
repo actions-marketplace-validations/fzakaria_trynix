@@ -1,11 +1,13 @@
 // The hashes a narinfo carries, and checking bytes against them.
 //
 // A narinfo names the sha256 of the compressed file (FileHash) and of
-// the unpacked archive (NarHash). Checking the file hash is what tells
-// a download that ended short, or a cached copy that went bad, from
-// the real thing — the page once decoded a truncated NAR as far as it
-// went, kept the truncated bytes in the cache, and failed the same
-// package on every later visit.
+// the unpacked archive (NarHash). Only NarHash is checked, because only
+// NarHash is signed: FileHash describes whichever compression the cache
+// is serving and goes stale when it recompresses (store.js). NarHash
+// catches what the file hash used to — the page once decoded a
+// truncated NAR as far as it went, kept the truncated bytes in the
+// cache, and failed the same package on every later visit — and it
+// catches it on the bytes a signature actually covers.
 //
 // Which encoding those hashes are written in is up to the cache.
 // cache.nixos.org writes nix's own base32; cachix writes FileHash in

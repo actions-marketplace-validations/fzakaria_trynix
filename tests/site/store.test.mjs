@@ -5,6 +5,7 @@
 // target's length, and the guest's 9p client trusts the length.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 
 import { absoluteTarget } from "../../site/js/store.js";
 
@@ -72,4 +73,88 @@ test("executables and symlinks directly under bin/ are programs", () => {
 
 test("a package without a bin directory has no programs", () => {
   assert.deepEqual(programsOf([{ path: "", type: "directory" }]), []);
+});
+
+// Tests which of a narinfo's promises may fail a boot.
+//
+// A narinfo describes the same path twice. FileSize and FileHash
+// describe the compressed file the cache happens to be serving; NarSize
+// and NarHash describe the archive inside it. Only the second pair is in
+// the fingerprint a cache signs, and a cache that recompresses a NAR
+// changes the first pair without touching the bytes anyone vouched for:
+// cache.nixos.org did exactly that to glibc-2.40-224, whose narinfo
+// still says 9096823 bytes for a file it serves 9099653 of, while its
+// NarHash matches to the byte. Refusing that path rejects content that
+// is provably genuine, on the one field no signature covers.
+//
+// These drive fetchNar against a stubbed fetch, serving the NAR fixture
+// uncompressed, because the claim is about what does and does not abort
+// a download rather than about either check in isolation.
+import { createHash } from "node:crypto";
+import { fetchNar } from "../../site/js/store.js";
+
+// No Cache API in node: every call in cache.js degrades to no caching.
+globalThis.caches = {
+  open: async () => {
+    throw new Error("no storage here");
+  },
+};
+
+const narFixture = new URL("../fixtures/sample.nar", import.meta.url);
+
+async function servedNar() {
+  const bytes = new Uint8Array(await readFile(narFixture));
+  let served = 0;
+  globalThis.fetch = async () => {
+    served += 1;
+    return new Response(bytes);
+  };
+  return {
+    bytes,
+    sha256: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    fetches: () => served,
+  };
+}
+
+function narinfo(bytes, overrides) {
+  return {
+    storePath: "/nix/store/abc-sample",
+    url: "nar/sample.nar",
+    compression: "none",
+    substituter: "https://cache.example.org",
+    narSize: bytes.byteLength,
+    ...overrides,
+  };
+}
+
+test("a recompressed NAR still boots: FileSize and FileHash are unsigned", async () => {
+  const nar = await servedNar();
+  const info = narinfo(nar.bytes, {
+    // What cache.nixos.org says about glibc: both compressed fields
+    // stale, both signed fields exact.
+    fileSize: nar.bytes.byteLength + 2830,
+    fileHash: `sha256:${"a".repeat(64)}`,
+    narHash: nar.sha256,
+  });
+
+  const entries = await fetchNar(info, () => {});
+  assert.equal(entries.length > 0, true);
+  assert.equal(nar.fetches(), 1);
+});
+
+test("a NAR whose signed hash is wrong is refused", async () => {
+  const nar = await servedNar();
+  const info = narinfo(nar.bytes, { narHash: `sha256:${"b".repeat(64)}` });
+
+  await assert.rejects(() => fetchNar(info, () => {}), /sha256 does not match/);
+});
+
+test("a NAR whose signed size is wrong is refused", async () => {
+  const nar = await servedNar();
+  const info = narinfo(nar.bytes, {
+    narSize: nar.bytes.byteLength + 1,
+    narHash: nar.sha256,
+  });
+
+  await assert.rejects(() => fetchNar(info, () => {}), /narinfo says/);
 });
