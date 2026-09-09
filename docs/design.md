@@ -23,9 +23,9 @@ The pieces already exist in sibling projects; trynix is the glue:
 
 1. **Resolve.** Attribute (and optionally a version range) to one or
    more store-path digests, from static index shards. A package split
-   across outputs gets its `bin` sibling too, from a digest-keyed map
-   the site build shards out of a multiverse release artifact
-   ([nix/outputs.nix](../nix/outputs.nix)).
+   across outputs gets its `bin` sibling too, from the digest-keyed
+   `outs/` shards the multiverse publishes beside the index
+   ([site/js/outputs.js](../site/js/outputs.js)).
 2. **Walk.** Breadth-first over narinfos from cache.nixos.org to the
    full runtime closure, and verify every signature against the
    configured keys. The cache serves `access-control-allow-origin: *`,

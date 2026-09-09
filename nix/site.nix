@@ -5,7 +5,6 @@
 #   vendor/                             pinned browser dependencies
 #   qemu/                               the engine and the snapshot
 #   guest/                              kernel, initramfs, BIOS blobs
-#   outs/                               sibling-output digests
 #   assets.json                         content hashes for the above
 #
 # The engine and snapshot are fetches rather than builds (nix/engine.nix
@@ -15,7 +14,6 @@
 let
   vendor = import ./vendor.nix { inherit pkgs; };
   engine = import ./engine.nix { inherit pkgs; };
-  outputs = import ./outputs.nix { inherit pkgs; };
   guest = (import ./guest.nix { inherit pkgs; }).guest;
 in
 pkgs.runCommand "trynix-site" { nativeBuildInputs = [ pkgs.python3 ]; } ''
@@ -27,8 +25,7 @@ pkgs.runCommand "trynix-site" { nativeBuildInputs = [ pkgs.python3 ]; } ''
   cp -r ${../site}/. $out/
   chmod -R u+w $out
   cp -r ${vendor} $out/vendor
-  cp -r ${outputs} $out/outs
-  chmod -R u+w $out/vendor $out/outs
+  chmod -R u+w $out/vendor
 
   # The COOP/COEP service worker must sit at the site root: a worker's
   # scope is its directory, and a worker under vendor/ can never control

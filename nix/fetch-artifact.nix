@@ -1,12 +1,10 @@
 # One pinned artifact made of store paths, fetched as a derivation.
 #
-# Both things this repository fetches by hash are lists of, or images
-# of, the nix store: the multiverse's sibling-output index is an index
-# of store paths, and the migration snapshot is a RAM image of a guest
-# whose filesystem is the store. Nix scans a fixed-output derivation's
-# output for the hash part of every store path it knows, finds
-# thousands, and refuses — "is not allowed to refer to other store
-# paths".
+# What this repository fetches by hash is an image of the nix store:
+# the migration snapshot is a RAM image of a guest whose filesystem is
+# the store. Nix scans a fixed-output derivation's output for the hash
+# part of every store path it knows, finds thousands, and refuses —
+# "is not allowed to refer to other store paths".
 #
 # unsafeDiscardReferences is the documented way out. __structuredAttrs
 # is explicit because fetchurl only sets it from 26.05 on, and the

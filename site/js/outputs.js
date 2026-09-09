@@ -7,13 +7,15 @@
 // references. Selecting "jq" and booting a shell where jq is missing is
 // the visible result.
 //
-// The digests are in a multiverse release artifact the browser cannot
-// read (GitHub release downloads send no CORS header), so the site
-// build fetches it and shards it by the first two characters of the
-// digest — see nix/outputs.nix.
+// The multiverse publishes the digests sharded by the first two
+// characters of the path being asked about, one directory per system,
+// and serves them with open CORS — the same deployment, and the same
+// treatment, as the index shards site/js/multiverse.js reads.
+
+import { MULTIVERSE_URL, SYSTEM } from "./config.js";
 
 const SHARD_LENGTH = 2;
-const SHARD_DIR = "outs";
+const SHARD_DIR = `${MULTIVERSE_URL}/outs-${SYSTEM}`;
 
 const shards = new Map();
 

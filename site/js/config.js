@@ -12,6 +12,11 @@ export const CACHE_URL = "https://cache.nixos.org";
 // from GitHub Pages with open CORS, so the browser reads it directly.
 export const MULTIVERSE_URL = "https://nixmultiverse.com";
 
+// The architecture the guest boots, which is the one every store path
+// fetched here has to be built for. The multiverse names its per-system
+// data after it (site/js/outputs.js).
+export const SYSTEM = "x86_64-linux";
+
 // How many attribute matches the search list shows at once, and how
 // many completions the range box's dropdown offers.
 export const SEARCH_LIMIT = 12;
