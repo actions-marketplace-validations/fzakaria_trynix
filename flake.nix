@@ -44,6 +44,14 @@
           # put a number on each instruction class (nix/emubench.nix)
           emubench = import ./nix/emubench.nix { inherit pkgs; };
 
+          # the same probe for the baseline x86-64 ISA, so the benchmark
+          # history can run one instrument on engines whose guest CPU
+          # predates x86-64-v3 (tools/bench-history.py)
+          emubench-baseline = import ./nix/emubench.nix {
+            inherit pkgs;
+            march = "x86-64";
+          };
+
           # the guest image the browser VM boots: kernel, initramfs and
           # the BIOS blobs (nix/guest.nix)
           inherit (import ./nix/guest.nix { inherit pkgs; })
@@ -132,6 +140,19 @@
             in
             tool "exec-bench" "${python}/bin/python3 ${./tools}/exec-bench.py" [
               pkgs.chromium
+            ];
+
+          # measure every published engine on this machine and write the
+          # history the site's benchmark page draws (site/bench/). git and
+          # nix are for building the site at each commit that repinned.
+          bench-history =
+            let
+              python = pkgs.python3.withPackages (ps: [ ps.websocket-client ]);
+            in
+            tool "bench-history" "${python}/bin/python3 ${./tools}/bench-history.py" [
+              pkgs.chromium
+              pkgs.git
+              pkgs.nix
             ];
 
           # publish the example package into the site as a binary cache

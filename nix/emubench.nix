@@ -14,7 +14,17 @@
 # Statically linked against musl so the closure is one store path, which
 # is what lets it be served from a binary cache beside the page and run
 # in the browser guest with no network, exactly like the probe.
-{ pkgs }:
+#
+# `march` is the ISA the C glue is compiled for. The default matches
+# nix/guest/machine.json; tools/bench-history.py asks for the baseline
+# x86-64 so one probe runs on every engine ever published, including
+# those whose guest CPU was qemu64 and died on SIGILL with a Haswell
+# build. The timed loops are hand-written assembly either way, so the
+# two builds are the same instrument.
+{
+  pkgs,
+  march ? "haswell",
+}:
 pkgs.pkgsStatic.stdenv.mkDerivation {
   pname = "trynix-emubench";
   version = "1";
@@ -23,15 +33,14 @@ pkgs.pkgsStatic.stdenv.mkDerivation {
 
   nativeBuildInputs = [ pkgs.python3 ];
 
-  # -march=haswell to match nix/guest/machine.json, so the compiler may
-  # emit the instructions that model promises. gen_cold.py writes the two
-  # large straight-line functions (50000 and 2000 blocks) the cold tests
-  # walk; -mno-red-zone keeps the hand-written asm honest.
+  # gen_cold.py writes the two large straight-line functions (50000 and
+  # 2000 blocks) the cold tests walk; -mno-red-zone keeps the hand-written
+  # asm honest.
   buildPhase = ''
     runHook preBuild
     python3 ${./emubench/gen_cold.py} cold_50k 50000 > cold_50k.S
     python3 ${./emubench/gen_cold.py} cold_2k 2000 > cold_2k.S
-    $CC -O2 -static -march=haswell -mno-red-zone -o emubench \
+    $CC -O2 -static -march=${march} -mno-red-zone -o emubench \
       ${./emubench/emubench.c} cold_50k.S cold_2k.S
     runHook postBuild
   '';

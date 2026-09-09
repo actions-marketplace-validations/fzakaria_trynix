@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>trynix benchmarks</title>
+    <meta
+      name="description"
+      content="How fast the browser emulator got, one engine release at a time: real packages cold and warm, and each instruction class the emulator pays for."
+    />
+    <link rel="canonical" href="https://trynix.dev/bench/" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧪</text></svg>"
+    />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#16181d" media="(prefers-color-scheme: dark)" />
+    <link rel="stylesheet" href="../style.css" />
+    <link rel="stylesheet" href="bench.css" />
+  </head>
+  <body>
+    <header class="site">
+      <h1><a href="..">trynix</a> <span class="muted">benchmarks</span></h1>
+      <nav class="site">
+        <a href="..">Boot a package</a>
+        <a href="https://github.com/fzakaria/trynix/blob/main/docs/engine-execution.md">How it was measured</a>
+        <a href="https://github.com/fzakaria/trynix">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <p>
+        A benchmark of the QEMU emulator behind trynix, measured across its
+        <a href="https://github.com/fzakaria/trynix/releases">engine releases</a> to check that
+        each change to it was an improvement.
+      </p>
+
+      <h2>Real packages, cold and warm</h2>
+      <p>
+        Wall seconds to run each package in a fresh guest, first cold and then again warm, plus
+        the time to boot to a shell.
+      </p>
+      <div id="exec-charts"></div>
+      <div id="standings"></div>
+
+      <h2>Instruction classes</h2>
+      <p>
+        Millions of guest instructions per second on a fixed assembly loop per mechanism the
+        emulator pays for, so a change names a mechanism rather than a workload. Higher is better.
+      </p>
+      <div id="emubench-charts"></div>
+
+      <h2>What moved the numbers</h2>
+      <p>
+        The changes behind the releases, in order.
+        <a href="https://github.com/fzakaria/trynix/blob/main/docs/performance.md">performance.md</a>
+        and
+        <a href="https://github.com/fzakaria/trynix/blob/main/docs/engine-execution.md"
+          >engine-execution.md</a
+        >
+        carry the profiles and the dead ends.
+      </p>
+
+      <section class="change">
+        <h3>The store share</h3>
+        <p class="meta">
+          <a href="https://github.com/fzakaria/trynix/blob/main/patches/0002-9p-local-resolve-a-path-in-one-syscall-under-emscripten.patch"
+            >patch 0002</a
+          >
+          · <code>cache=loose</code> on the 9p mount
+        </p>
+        <p class="gain">first <code>ruby -e 1</code>: about 35 s to about 15 s</p>
+        <p>
+          Packages reach the guest over a 9p share. The guest now caches the share instead of asking
+          the host on every lookup, and resolves a path in one syscall instead of one per
+          component.
+        </p>
+      </section>
+
+      <section class="change">
+        <h3>Entropy</h3>
+        <p class="meta">
+          <a href="https://github.com/fzakaria/trynix/blob/main/nix/guest/reseed.c">reseed.c</a> ·
+          <code>rdrand</code> and <code>virtio-rng</code> in
+          <a href="https://github.com/fzakaria/trynix/blob/main/nix/guest/machine.json">machine.json</a>
+        </p>
+        <p class="gain">first run of any binary: about 50 s to 2.5 s</p>
+        <p>
+          The snapshot is taken before the kernel has seeded its random pool, so the first program
+          to ask for randomness spun in a jitter loop for most of a minute. The guest now has a
+          hardware random source and reseeds at boot.
+        </p>
+      </section>
+
+      <section class="change">
+        <h3>The clock</h3>
+        <p class="meta">
+          <a href="https://github.com/fzakaria/trynix/blob/main/patches/0003-count-the-clock-the-resumer-will-count.patch"
+            >patch 0003</a
+          >
+        </p>
+        <p class="gain">guest time was 3.3x slow; <code>sleep 10</code> took 33 s, now 10</p>
+        <p>
+          The snapshot was taken on a 3.29 GHz cycle counter and resumed on a 1 GHz one, so the
+          guest's clock ran 3.3x slow. Both builds now count the same clock, and instruction-class
+          numbers from before are corrected by the measured ratio.
+        </p>
+      </section>
+
+      <section class="change">
+        <h3>Idle, and the engine's size</h3>
+        <p class="meta">
+          <a href="https://github.com/fzakaria/trynix/blob/main/patches/xterm-pty">xterm-pty patch</a>
+          · <code>ioeventfd=off</code> · DWARF stripped
+        </p>
+        <p class="gain">idle guest 1.45 to 0.39 cores; engine download 41 MB to 13 MB</p>
+        <p>
+          The main loop never slept because the pty poll returned at once; it now waits, with 9p
+          off that loop so the wait is safe. Stripping debug info from the engine cut the
+          download to a third.
+        </p>
+      </section>
+
+      <section class="change">
+        <h3>Correctness</h3>
+        <p class="meta">
+          <a href="https://github.com/fzakaria/trynix/blob/main/patches/0004-wasm-tcg-pass-ctpop-the-right-operands.patch"
+            >patch 0004</a
+          >
+          · guest CPU raised to x86-64-v3
+        </p>
+        <p class="gain">no speed change; opencode runs at all</p>
+        <p>
+          The newer CPU model exposed a <code>POPCNT</code> that answered from a stale register,
+          now fixed and checked in CI. opencode needs SSE4.2 and crashed until that fix, so its
+          chart starts here.
+        </p>
+      </section>
+
+      <section class="change">
+        <h3>The backend</h3>
+        <p class="meta">
+          <a href="https://github.com/fzakaria/trynix/blob/main/patches/0006-wasm32-batch-chain-locals.patch"
+            >patch 0006</a
+          >
+        </p>
+        <p class="gain">
+          <code>opencode --version</code> 408 s to 171 s; one compiled block 349 to 1163 mips
+        </p>
+        <p>
+          Blocks now compile in batches of 64 after 32 runs instead of one module per block after
+          1500, tail-call their successor instead of returning to a C dispatcher, and keep the
+          guest registers in wasm locals. What remains is generated code spread over about 48,000
+          blocks, cache-missing on every transition.
+        </p>
+      </section>
+
+      <h2>Appendix</h2>
+      <dl id="appendix"></dl>
+      <div id="appendix-skipped" class="muted"></div>
+    </main>
+
+    <footer class="muted">
+      Made with ❤️ by
+      <a href="https://fzakaria.com">Farid Zakaria</a>
+      ·
+      <a href="https://github.com/fzakaria/trynix/blob/main/LICENSE">MIT</a>
+    </footer>
+
+    <script type="module" src="bench.js"></script>
+  </body>
+</html>

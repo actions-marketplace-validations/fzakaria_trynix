@@ -91,6 +91,16 @@ def completion(transcript, marker):
     return int(match[1]) if match else None
 
 
+STORE_PATH = re.compile(r"(/nix/store/[a-z0-9]{32}-[^/\s]+)")
+
+
+def store_root(text):
+    """The store path a resolved binary lives under, from readlink's
+    output: /nix/store/<hash>-hello-2.12.2/bin/hello gives the package."""
+    match = STORE_PATH.search(text)
+    return match[1] if match else None
+
+
 def parse_time(text):
     """busybox time's three lines, in seconds; whichever are present."""
     result = {}
@@ -155,6 +165,22 @@ def run_entry(entry, base, browser_binary, runs_dir):
         time.sleep(0.5)
         result["shell_seconds"] = round(time.monotonic() - started, 2)
         pgid = os.getpgid(browser.process.pid)
+
+        # which package the command resolves to, from the guest's own
+        # PATH: the page picks a version, and a link to the run should
+        # name it. This is a readlink, not a run; nothing below is warm.
+        program = entry["command"].split()[0]
+        marker = "EXEC_BENCH_WHICH"
+        mark = len(browser.transcript())
+        browser.evaluate(
+            "window.trynix.master.ldisc.writeFromLower("
+            + json.dumps(wrap_command(f'readlink -f "$(command -v {program})"', marker) + "\n")
+            + ")"
+        )
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and completion(browser.transcript()[mark:], marker) is None:
+            time.sleep(POLL_SECONDS)
+        result["resolved"] = store_root(browser.transcript()[mark:])
 
         for index, label in enumerate(ITERATIONS):
             marker = f"EXEC_BENCH_{index}"

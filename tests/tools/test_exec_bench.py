@@ -62,3 +62,17 @@ class Completion(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StoreRoot(unittest.TestCase):
+    """readlink's answer names a file inside a package; the package is
+    the store path up to its first slash."""
+
+    def test_binary_inside_a_package(self):
+        bench = load()
+        text = "$ readlink -f \"$(command -v hello)\"\r\n/nix/store/awmhh7ci4admi71gs6b73awh0lxgrqqn-hello-2.12.2/bin/hello\r\n"
+        self.assertEqual(bench.store_root(text), "/nix/store/awmhh7ci4admi71gs6b73awh0lxgrqqn-hello-2.12.2")
+
+    def test_nothing_resolved(self):
+        bench = load()
+        self.assertIsNone(bench.store_root("sh: hello: not found\r\n"))

@@ -203,6 +203,16 @@ Two apps, both driving a headless browser the way `cpu-test` does:
 
 Run the CPU probe before either; a wrong engine can be fast.
 
+- `nix run .#bench-history -- --site <site> --out site/bench/history.json`
+  runs both of the above against every engine this repository has ever
+  pinned, on one machine in one sitting: it builds the site at each
+  commit that repinned, so nix verifies that engine, snapshot and guest
+  image by hash, puts them under today's page, and records emubench
+  (median of three, corrected by the guest's clock ratio) and exec-bench
+  per release. The site's benchmark page, [site/bench/](../site/bench/),
+  draws the file. Rerun it after publishing an engine; the tags are
+  immutable, so the history can always be regenerated from scratch.
+
 ## Across sizes: the suite, pinned engine against patch 0006
 
 `exec-bench` on the same site, single runs, Chromium 152 on a 16-core

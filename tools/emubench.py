@@ -33,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -58,8 +59,15 @@ TESTS = [
     "cold2k/p100", "cold2k/p1500", "cold2k/p1600",
 ]
 DONE = "emubench: done"
+# the shell reports a probe that died this way instead of finishing; no
+# point waiting the limit out
+CRASHED = ("Illegal instruction", "Segmentation fault", "Bus error", "Killed")
 ROW = re.compile(r"emubench: (\S+)\s+iters=(\d+) ns=(\d+) ns/iter=([\d.]+) mips=([\d.]+)")
 PROBE_LIMIT_SECONDS = 600
+ROW_POLL_SECONDS = 0.05
+# a row has to have run this long on the host for its clock ratio to
+# mean anything; the fixed cost of printing a row is milliseconds
+MIN_ROW_SECONDS = 0.5
 
 
 def overlay_engine(site, engine):
@@ -106,6 +114,64 @@ def parse_rows(text):
     return rows
 
 
+def watch_rows(browser, mark, limit):
+    """Poll the transcript until the probe says it is done, noting on the
+    host's clock when each row appeared. Returns (seconds taken, what the
+    guest said, {row name: host seconds since the command was typed}), or
+    None for the first when the probe did not finish."""
+    started = time.monotonic()
+    arrivals = {}
+    said = ""
+    while time.monotonic() - started < limit:
+        said = browser.transcript()[mark:]
+        now = time.monotonic() - started
+        for name in parse_rows(said):
+            arrivals.setdefault(name, now)
+        if DONE in said:
+            return now, said, arrivals
+        if crashed(said):
+            return None, said, arrivals
+        time.sleep(ROW_POLL_SECONDS)
+    return None, said, arrivals
+
+
+def crashed(said):
+    """The shell's report of the probe dying, if any."""
+    for marker in CRASHED:
+        if marker in said:
+            return marker
+    return None
+
+
+def clock_ratio(rows, arrivals):
+    """The guest's clock against the host's: each row's guest-timed
+    duration over the host time between its appearance and the previous
+    row's, the median over rows that ran long enough to be worth reading.
+    A correct clock gives 1.0; the 3.3x-slow clock before patch 0003
+    gives about 0.3. None when no row ran long enough."""
+    ratios = []
+    previous = 0.0
+    for name in sorted(arrivals, key=arrivals.get):
+        host = arrivals[name] - previous
+        previous = arrivals[name]
+        if name not in rows or host < MIN_ROW_SECONDS:
+            continue
+        ratios.append(rows[name]["ns"] / 1e9 / host)
+    if not ratios:
+        return None
+    ratios.sort()
+    middle = len(ratios) // 2
+    return ratios[middle] if len(ratios) % 2 else (ratios[middle - 1] + ratios[middle]) / 2
+
+
+def guest_seconds(rows):
+    """How long the guest's own clock says the probe took: the sum of
+    every row's nanoseconds. The host's wall clock over the same run is
+    the check on it -- the guest's clock once ran 3.3x slow
+    (docs/performance.md), and every mips figure is measured against it."""
+    return sum(row["ns"] for row in rows.values()) / 1e9
+
+
 def print_table(rows):
     print(f"{'test':14s} {'ns/iter':>10s} {'mips':>9s}")
     for name in TESTS:
@@ -128,6 +194,20 @@ def main():
     parser.add_argument("--json", help="write the rows here")
     parser.add_argument("--test", default="all", help="one test name, or all")
     parser.add_argument(
+        "--probe",
+        help="run this store path instead of the probe in the site's example cache",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=PROBE_LIMIT_SECONDS,
+        help="seconds to wait for the probe to finish",
+    )
+    parser.add_argument(
+        "--cache",
+        help="'<url> <public key>' of the cache serving --probe (default: the site's example cache)",
+    )
+    parser.add_argument(
         "--browser",
         default=os.environ.get("TRYNIX_BROWSER", "chromium"),
         help="the headless browser to drive",
@@ -140,7 +220,14 @@ def main():
         sys.exit("--engine needs --site: the overlay is made on a local copy")
 
     manifest_root = args.site if args.site else "site"
-    probe, public_key = read_manifest(manifest_root)
+    if args.probe and args.cache:
+        probe = args.probe
+        cache = args.cache
+    else:
+        probe, public_key = read_manifest(manifest_root)
+        cache = f"{cpu.CACHE_PATH} {public_key}"
+        if args.probe:
+            probe = args.probe
 
     scratch = None
     shutdown = None
@@ -152,9 +239,7 @@ def main():
             site, scratch = overlay_engine(site, args.engine)
         base, shutdown = cpu.serve(site)
 
-    query = urllib.parse.urlencode(
-        {"path": probe, "cache": f"{cpu.CACHE_PATH} {public_key}", "boot": "1"}
-    )
+    query = urllib.parse.urlencode({"path": probe, "cache": cache, "boot": "1"})
     url = f"{base}/?{query}"
     print(f"booting {url}", flush=True)
 
@@ -176,11 +261,12 @@ def main():
             "window.trynix.master.ldisc.writeFromLower("
             f'{json.dumps("emubench " + args.test + chr(10))})'
         )
-        taken = cpu.await_marker(browser, DONE, PROBE_LIMIT_SECONDS)
-        said = browser.transcript()[mark:]
+        taken, said, arrivals = watch_rows(browser, mark, args.limit)
         if taken is None:
             print(said)
-            sys.exit(f"the probe did not finish within {PROBE_LIMIT_SECONDS}s")
+            if crashed(said):
+                sys.exit(f"the probe died: {crashed(said)}")
+            sys.exit(f"the probe did not finish within {args.limit}s")
 
         rows = parse_rows(said)
         # a single test prints whatever rows it has; only `all` is checked
@@ -193,7 +279,18 @@ def main():
             print_table(rows)
         if args.json:
             with open(args.json, "w") as f:
-                json.dump({"shell_seconds": None, "rows": rows}, f, indent=2)
+                json.dump(
+                {
+                    # keystroke to the done marker, on the host's clock
+                    "host_seconds": round(taken, 2),
+                    "guest_seconds": round(guest_seconds(rows), 2),
+                    # the guest's clock over the host's, row by row
+                    "clock_ratio": clock_ratio(rows, arrivals),
+                    "rows": rows,
+                },
+                f,
+                indent=2,
+            )
         if missing:
             sys.exit(f"rows missing from the probe's output: {', '.join(missing)}")
         print(f"done in {taken:.1f}s", flush=True)

@@ -54,4 +54,13 @@ pkgs.runCommand "trynix-site" { nativeBuildInputs = [ pkgs.python3 ]; } ''
   # keeps in the browser's Cache API, which keys on the URL: their
   # content hashes ride as a query string instead.
   python3 ${../tools/asset-versions.py} $out qemu guest
+
+  # And for the benchmark page's script and stylesheet, which live beside
+  # it rather than under js/: a query string per content hash, so a
+  # deploy never pairs the page with a browser's cached copy of the old
+  # script. Its data file is fetched with no-store and needs nothing.
+  for name in bench.js bench.css; do
+    hash=$(sha256sum "$out/bench/$name" | cut -c1-12)
+    substituteInPlace $out/bench/index.html --replace-fail "\"$name\"" "\"$name?v=$hash\""
+  done
 ''
