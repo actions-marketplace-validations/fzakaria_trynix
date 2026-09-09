@@ -182,19 +182,9 @@ function wallCell(record, name, phase) {
     return format(null, "s");
   }
   const text = format(measurement.wall_seconds, "s");
-  if (measurement.status !== 0) {
-    return `${text} (exit ${measurement.status ?? "?"})`;
-  }
-  return measurement.runs > 1 ? `${text} (${measurement.runs} runs)` : text;
-}
-
-// The spread over repeated runs, [min, max], when there was more than one.
-function wallRange(record, name, phase) {
-  const measurement = execResult(record, name)?.[phase];
-  if (!measurement || measurement.status !== 0 || !(measurement.runs > 1)) {
-    return null;
-  }
-  return [measurement.wall_min, measurement.wall_max];
+  return measurement.status === 0
+    ? text
+    : `${text} (exit ${measurement.status ?? "?"})`;
 }
 
 function bootSeconds(record) {
@@ -294,25 +284,6 @@ function panel(title, subtitle, records, series, unit, tooltipHost) {
         class: "milestone",
       }),
     );
-  });
-
-  // the spread of repeated runs, a thin bar behind each point
-  series.forEach((s, k) => {
-    (s.ranges ?? []).forEach((range, i) => {
-      if (!range) {
-        return;
-      }
-      svg.append(
-        el("line", {
-          x1: x(i),
-          x2: x(i),
-          y1: y(range[1]),
-          y2: y(range[0]),
-          class: "range",
-          style: `stroke:${SERIES_COLORS[k]}`,
-        }),
-      );
-    });
   });
 
   // the lines, broken at gaps, and a marker per point
@@ -429,19 +400,15 @@ function panel(title, subtitle, records, series, unit, tooltipHost) {
       ...(milestone
         ? [html("div", { class: "tip-change" }, changeDescription(milestone))]
         : []),
-      ...series.map((s) => {
-        const range = s.ranges?.[i];
-        const spread = range
-          ? ` (${format(range[0], unit)} to ${format(range[1], unit)})`
-          : "";
-        return html("div", {}, [
+      ...series.map((s) =>
+        html("div", {}, [
           html("span", {
             class: "swatch",
             style: `background:${SERIES_COLORS[series.indexOf(s)]}`,
           }),
-          `${s.label}: ${format(s.values[i], unit)}${spread}`,
-        ]);
-      }),
+          `${s.label}: ${format(s.values[i], unit)}`,
+        ]),
+      ),
     );
     tooltipHost.hidden = false;
     const hostBox = wrapper.getBoundingClientRect();
@@ -527,7 +494,6 @@ function drawExec(records) {
     const series = ["cold", "warm"].map((phase) => ({
       label: phase,
       values: withExec.map((r) => wall(r, name, phase)),
-      ranges: withExec.map((r) => wallRange(r, name, phase)),
     }));
     const command =
       withExec.map((r) => execResult(r, name)?.command).find((c) => c) ?? "";
@@ -620,7 +586,7 @@ function describeRunner(records) {
   const facts = [
     [
       "method",
-      `every instruction-class point is the median of ${probeRuns ?? "several"} probe runs; every package point is the median of ${latest.exec?.runs ?? 1} fresh guests, each run cold then warm, with the range drawn behind it`,
+      `every instruction-class point is the median of ${probeRuns ?? "several"} probe runs; every package point is one run, cold then warm, in a fresh guest`,
     ],
     ["CPU", `${runner.cpu}, ${runner.cores} hardware threads`],
     [
