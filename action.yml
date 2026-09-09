@@ -226,7 +226,7 @@ runs:
           echo
           # One line per paragraph: a comment is rendered with hard line
           # breaks, so a wrapped sentence stays wrapped.
-          echo "A VM in the tab fetches this pull request's closure from the cache and drops you at a shell with it on PATH. Nothing runs on a server, and the link is the environment — send it on."
+          echo "A Linux VM boots in the tab, fetches this pull request's build from the cache, and gives you a shell with it on PATH. Nothing runs on a server, and the link works for anyone you send it to."
           if [ -n "$CORS" ]; then
             echo
             echo "> $CORS, so the boot stops at the first download."

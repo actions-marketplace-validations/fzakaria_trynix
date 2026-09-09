@@ -263,7 +263,9 @@ at all. So the only way to hand a fork's build a push token is
 `pull_request_target`, which runs in your repository's context. Check out
 `refs/pull/<n>/head` there and you are running a contributor's code with
 a token in the environment. A flake evaluates arbitrary code before it
-builds anything, so assume they can read it.
+builds anything, so assume they can read it. `actions/checkout` refuses
+that checkout unless you pass `allow-unsafe-pr-checkout: true`, which is
+GitHub naming the trade rather than a step to skip past.
 
 What that costs depends on what the token can do, and this action is not
 the one holding it — it takes no token, so the exposure is entirely your

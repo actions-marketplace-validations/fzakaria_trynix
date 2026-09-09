@@ -43,9 +43,17 @@ jobs:
     steps:
       # The pull request's own commit. The default for this trigger is
       # the base branch, which would preview the wrong thing.
+      #
+      # actions/checkout refuses a fork's code under pull_request_target
+      # without allow-unsafe-pr-checkout, because that combination is the
+      # "pwn request" shape: a stranger's code in a job that holds this
+      # repository's secrets. https://gh.io/securely-using-pull_request_target
+      # has the detail. Setting it is the opt-in, and what makes the
+      # opt-in defensible is the paragraph above about the scoped token.
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          allow-unsafe-pr-checkout: true
 
       - uses: cachix/install-nix-action@v31
         with:
