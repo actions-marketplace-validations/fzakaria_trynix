@@ -3,14 +3,14 @@
 // files answer everything trynix needs, both sharded by the first two
 // characters of the attribute:
 //
-//   versions/<shard>.json  every version an attribute ever shipped
-//   meta/<shard>.json      the x86_64-linux store-path digest per
-//                          version, plus sizes and the census verdict
+//   versions/<shard>.json        every version an attribute ever shipped
+//   meta-<system>/<shard>.json   the store-path digest per version, plus
+//                                sizes and the census verdict
 //
 // The meta shard is fetched whole rather than per attribute because its
 // reference lists are indices into a shard-level intern table.
 
-import { MULTIVERSE_URL } from "./config.js";
+import { MULTIVERSE_URL, SYSTEM } from "./config.js";
 
 // The multiverse shard function, ported from its site/js/data.js. Note
 // it does NOT pad: a one-character attribute lands in a one-character
@@ -61,7 +61,7 @@ export function attrNames() {
 // looked) — a boot of an unprobed path is worth attempting, a boot of a
 // known-dead one is not.
 export async function versionsOf(attr) {
-  const meta = await fetchShard("meta", attr);
+  const meta = await fetchShard(`meta-${SYSTEM}`, attr);
   const entries = meta.attrs?.[attr];
   if (entries === undefined) {
     return [];
