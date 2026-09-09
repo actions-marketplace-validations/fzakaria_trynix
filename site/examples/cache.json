@@ -3,7 +3,7 @@
   "publicKey": "trynix-examples-1:dZOV2uGWvjHo6IC5ZqCCu0dmIRzLm9pyOQJBDnBsXRY=",
   "paths": {
     "hello-trynix": "/nix/store/awmhh7ci4admi71gs6b73awh0lxgrqqn-hello-trynix-2.12.3",
-    "probe": "/nix/store/vd1265k8rg8jgjvdm5hf5cvwbdbhywyh-trynix-probe-static-x86_64-unknown-linux-musl-1",
+    "probe": "/nix/store/lq8xmbnv0ykvkyyikd0w8i3ds0k6if06-trynix-probe-static-x86_64-unknown-linux-musl-1",
     "emubench": "/nix/store/vk1ih0la8pfs92v8cy5vkv48kgmi14db-trynix-emubench-static-x86_64-unknown-linux-musl-1"
   }
 }

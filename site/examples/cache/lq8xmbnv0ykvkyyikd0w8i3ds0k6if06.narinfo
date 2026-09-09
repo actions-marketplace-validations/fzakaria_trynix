@@ -1,0 +1,10 @@
+StorePath: /nix/store/lq8xmbnv0ykvkyyikd0w8i3ds0k6if06-trynix-probe-static-x86_64-unknown-linux-musl-1
+URL: nar/1x325qvvivic33b5glb84r5vgdgzwh4gzcpzblcmhjymjcgh0q43.nar.xz
+Compression: xz
+FileHash: sha256:1x325qvvivic33b5glb84r5vgdgzwh4gzcpzblcmhjymjcgh0q43
+FileSize: 17632
+NarHash: sha256:02gwzvhdjrkba772j0gm0qsg89n4y2p6dd21i559f36gglp46ggb
+NarSize: 47888
+References: 
+Deriver: 88xq52nyhyam6k3ckh4r3rl1y0dhydy5-trynix-probe-static-x86_64-unknown-linux-musl-1.drv
+Sig: trynix-examples-1:iTcxEwSnKLaFBOPvmJn9z4E6KPWQ1FqoRPwJMPdGYWSZd9y3zeYCzL6KzvlnLBoF6Zye2Yyc+Z3gugkNyKO9BA==
