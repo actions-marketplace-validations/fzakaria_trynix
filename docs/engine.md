@@ -76,6 +76,17 @@ The patches matter more than the build flags:
   Multi-block loops run 1.5x to 2x faster than under 0006 alone;
   [engine-execution.md](./engine-execution.md#the-follow-up-patch-0007)
   has the numbers.
+- `xterm-pty/0001-honour-the-poll-timeout.patch` and
+  `xterm-pty/0002-finish-the-poll-scan-before-waiting.patch` fix the
+  console library's `poll(2)`. emscripten hands every stream's poll op
+  a hardcoded -1, so the terminal slept until a keystroke rather than
+  until the caller's deadline; and the op asked for that sleep by
+  throwing, which abandoned the scan of the caller's remaining
+  descriptors, so a poll whose set held the terminal never reached
+  anything else while the terminal was quiet. QEMU starts an incoming
+  migration from a watch on the stream's descriptor, so a resume did
+  not begin at all until the page typed -- which is what the page's
+  handshake newline was really doing.
 
 Otherwise the emscripten flags are upstream's verbatim (`-sASYNCIFY`,
 `-pthread -sPROXY_TO_PTHREAD`, `-sTOTAL_MEMORY=2300MB`, the xterm-pty

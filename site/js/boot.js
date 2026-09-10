@@ -141,19 +141,6 @@ const RESUMED_MARKER = "vm_state_notify running 1";
 // offering newlines blind, as it did before it could ask.
 const RESUMED_TIMEOUT_MS = 10000;
 
-// What the page writes while the stream is loading, and how often.
-//
-// The engine's main loop sleeps until an event reaches it, and the
-// stream is read by a coroutine that only runs when that loop turns,
-// so the load is paced by whatever the page writes: a page that waits
-// in silence for QEMU to say the machine is running waits ten seconds
-// for a load that takes 120 ms under a page that keeps typing. A space
-// rather than a newline because init's `read` throws away the line it
-// takes, so the guest never sees these as a command. Below 50 ms the
-// load stops getting faster.
-const PUMP = " ";
-const PUMP_MS = 50;
-
 const TRANSCRIPT_LIMIT = 65536;
 // How often a guest QEMU never spoke for is offered its newline.
 const RESUME_POLL_MS = 300;
@@ -429,13 +416,10 @@ async function coldBoot(console_, master, terminal) {
 // keystroke, and spent three seconds of every resume on it.
 //
 // The guest is parked on init's read, exactly where the snapshot
-// caught it, and one newline finishes the handshake. Two things make
-// that less simple than it sounds: a newline sent while the stream is
-// still loading is lost, since the UART it lands in is overwritten by
-// the restored device state, and the load only advances while the page
-// is writing (PUMP). So the page writes spaces, which init's read
-// takes as part of the handshake line and throws away, until QEMU says
-// the machine is running — then the newline that ends that line, once.
+// caught it, so one newline finishes the handshake — but a newline
+// sent while the stream is still loading is lost, since the UART it
+// lands in is overwritten by the restored device state. So the page
+// waits for QEMU to say the machine is running, and sends one.
 //
 // The poll below is the net under an engine whose trace log does not
 // carry that event, and boot-test fails a boot that needs it.
@@ -444,11 +428,7 @@ async function resume(console_, master, terminal) {
   // anything costs one handshake timeout rather than several.
   const mounted = console_.waitFor(MOUNTED_MARKER);
 
-  // Carry the stream's load, then end the handshake line.
-  const pump = setInterval(() => send(master, PUMP), PUMP_MS);
-  send(master, PUMP);
   const running = await appeared(console_, RESUMED_MARKER, RESUMED_TIMEOUT_MS);
-  clearInterval(pump);
   sendLine(master);
   const poll = running
     ? null

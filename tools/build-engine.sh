@@ -62,7 +62,9 @@ docker run --rm -d --name "$CONTAINER" -v "$WORK/src:/qemu" "$IMAGE" >/dev/null
 # than from the QEMU tree, so its patches are applied in the container.
 # patches/xterm-pty/ fixes poll(2): emscripten hands every stream's poll
 # op a hardcoded -1, so the terminal slept until a keystroke and QEMU's
-# main loop had to spin instead of waiting on its own deadline.
+# main loop had to spin instead of waiting on its own deadline, and the
+# op asked for that sleep by throwing, which left the rest of the
+# caller's descriptors unscanned (docs/engine.md).
 for patch in "$PATCHES"/xterm-pty/*.patch; do
   [ -e "$patch" ] || continue
   echo "applying $(basename "$patch") to xterm-pty"
